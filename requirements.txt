@@ -1,2 +1,7 @@
 yfinance
 plotly
+scipy
+pillow
+pyppeteer
+nest_asyncio
+reportlab
