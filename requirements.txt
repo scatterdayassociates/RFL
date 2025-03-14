@@ -1,0 +1,12 @@
+streamlit
+yfinance
+pandas
+numpy
+sqlite3
+plotly
+scipy
+pillow
+pyppeteer
+nest_asyncio
+streamlit-modal
+reportlab
