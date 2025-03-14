@@ -5,3 +5,4 @@ pillow
 pyppeteer
 nest_asyncio
 reportlab
+streamlit-modal
