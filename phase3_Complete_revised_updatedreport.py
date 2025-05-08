@@ -326,8 +326,7 @@ def calculate_historical_portfolio_value(portfolio_df):
             st.warning(f"Error fetching historical data for {row['Stock']}: {str(e)}")
             continue
     
-    portfolio_value_df.iloc[1:] = portfolio_value_df.iloc[1:].replace(0, np.nan).ffill()
-    
+    portfolio_value_df = portfolio_value_df.replace(0, np.nan).ffill().bfill()
     return portfolio_value_df
 
 
