@@ -286,104 +286,50 @@ def optimize_portfolio(df, max_harm_score, min_stock_threshold):
 def calculate_historical_portfolio_value(portfolio_df):
     """
     Calculate daily portfolio value from the earliest purchase date until today
-    with improved handling of daily price changes
     """
     if portfolio_df.empty:
         return pd.DataFrame()
     
-    # Convert purchase dates to datetime and ensure no timezone info
-    portfolio_df = portfolio_df.copy()  # Create a copy to avoid modifying the original
-    portfolio_df['Purchase Date'] = pd.to_datetime(portfolio_df['Purchase Date'])
-    if hasattr(portfolio_df['Purchase Date'].iloc[0], 'tz_localize'):
-        portfolio_df['Purchase Date'] = portfolio_df['Purchase Date'].dt.tz_localize(None)
-    
-    # Convert numeric columns to float
-    for col in ['Units', 'Purchase Price ($)', 'Current Price ($)']:
-        if col in portfolio_df.columns:
-            portfolio_df[col] = pd.to_numeric(portfolio_df[col].astype(str).str.replace('$', '').str.replace(',', ''), errors='coerce')
+    # Convert purchase dates to datetime
+    portfolio_df['Purchase Date'] = pd.to_datetime(portfolio_df['Purchase Date']).dt.tz_localize(None)
     
     # Get the earliest purchase date and today's date
     start_date = portfolio_df['Purchase Date'].min()
-    end_date = datetime.now().date()
+    end_date = datetime.now()
     
-    # Create a combined dataframe to store all stock price histories
-    all_stock_data = pd.DataFrame()
+    # Initialize DataFrame to store daily values
+    date_range = pd.date_range(start=start_date, end=end_date, freq='D')
+    portfolio_value_df = pd.DataFrame(index=date_range)
+    portfolio_value_df['Total Value'] = 0.0
     
-    # Get historical data for each stock and combine
-    stock_units = {}
-    for idx, row in portfolio_df.iterrows():
-        ticker = row['Stock']
-        units = float(row['Units'])
-        purchase_date = row['Purchase Date']
-        
-        stock_units[ticker] = units
-        
+    # Calculate daily value for each stock
+    for _, row in portfolio_df.iterrows():
         try:
-            # Download historical data
-            stock = yf.Ticker(ticker)
-            # Use period parameter to get complete history
-            hist_data = stock.history(start=purchase_date, end=end_date)
+            # Get historical data for the stock
+            stock = yf.Ticker(row['Stock'])
+            hist_data = stock.history(start=row['Purchase Date'], end=end_date)
             
-            if hist_data.empty:
-                st.warning(f"No historical data available for {ticker}")
-                continue
             
-            # Reset timezone info if present
             hist_data.index = hist_data.index.tz_localize(None)
+
+            # Calculate daily value (price * units)
+            units = float(row['Units'])
+            daily_value = hist_data['Close'] * units
             
-            # Filter data from purchase date onward
-            hist_data = hist_data[hist_data.index >= purchase_date]
+            # Only consider values from purchase date onwards
+            daily_value = daily_value[daily_value.index >= row['Purchase Date']]
             
-            # Keep only the Close price and rename column
-            price_data = hist_data[['Close']].copy()
-            price_data.columns = [ticker]
-            
-            # Merge with existing data
-            if all_stock_data.empty:
-                all_stock_data = price_data
-            else:
-                all_stock_data = all_stock_data.join(price_data, how='outer')
+            # Add to total portfolio value
+            portfolio_value_df.loc[daily_value.index, 'Total Value'] += daily_value
             
         except Exception as e:
-            st.warning(f"Error fetching historical data for {ticker}: {str(e)}")
+            st.warning(f"Error fetching historical data for {row['Stock']}: {str(e)}")
             continue
     
-    if all_stock_data.empty:
-        st.error("Could not retrieve historical data for any stocks in the portfolio")
-        return pd.DataFrame()
+    portfolio_value_df.iloc[1:] = portfolio_value_df.iloc[1:].replace(0, np.nan).ffill()
     
-    # Forward fill missing data (for days when some stocks don't have data)
-    all_stock_data = all_stock_data.fillna(method='ffill')
-    
-    # Calculate portfolio value for each day
-    portfolio_value = pd.DataFrame(index=all_stock_data.index)
-    portfolio_value['Total Value'] = 0.0
-    
-    for ticker, units in stock_units.items():
-        if ticker in all_stock_data.columns:
-            portfolio_value['Total Value'] += all_stock_data[ticker] * units
-    
-    # Make sure we have a smooth daily series
-    portfolio_value = portfolio_value.sort_index()
-    
-    # Debug - print value ranges to identify potential issues
-    min_val = portfolio_value['Total Value'].min()
-    max_val = portfolio_value['Total Value'].max()
-    st.write(f"Debug - Value range: ${min_val:.2f} to ${max_val:.2f}")
-    
-    # Debug - check if there's any significant change in values
-    std_dev = portfolio_value['Total Value'].std()
-    mean_val = portfolio_value['Total Value'].mean()
-    cv = std_dev / mean_val if mean_val > 0 else 0
-    st.write(f"Debug - Coefficient of variation: {cv:.4f}")
-    
-    # Debug - first and last few values
-    st.write("Debug - First 5 values:")
-    st.write(portfolio_value.head())
-    st.write("Debug - Last 5 values:")
-    st.write(portfolio_value.tail())
-    
-    return portfolio_value
+    return portfolio_value_df
+
 
 
 # Function to get GICS Sector
