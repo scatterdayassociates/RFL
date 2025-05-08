@@ -298,7 +298,7 @@ def calculate_historical_portfolio_value(portfolio_df):
     end_date = datetime.now()
     
     # Initialize DataFrame to store daily values
-    date_range = pd.date_range(start=start_date, end=end_date, freq='D')
+    date_range = pd.date_range(start=start_date, end=end_date, freq='B')  # 'B' for business days only
     portfolio_value_df = pd.DataFrame(index=date_range)
     portfolio_value_df['Total Value'] = 0.0
     
@@ -309,7 +309,10 @@ def calculate_historical_portfolio_value(portfolio_df):
             stock = yf.Ticker(row['Stock'])
             hist_data = stock.history(start=row['Purchase Date'], end=end_date)
             
-            
+            if hist_data.empty:
+                continue
+                
+            # Make sure indices are comparable
             hist_data.index = hist_data.index.tz_localize(None)
 
             # Calculate daily value (price * units)
@@ -319,6 +322,9 @@ def calculate_historical_portfolio_value(portfolio_df):
             # Only consider values from purchase date onwards
             daily_value = daily_value[daily_value.index >= row['Purchase Date']]
             
+            # Reindex to match our portfolio date range (filling forward)
+            daily_value = daily_value.reindex(portfolio_value_df.index, method='ffill')
+            
             # Add to total portfolio value
             portfolio_value_df.loc[daily_value.index, 'Total Value'] += daily_value
             
@@ -326,7 +332,11 @@ def calculate_historical_portfolio_value(portfolio_df):
             st.warning(f"Error fetching historical data for {row['Stock']}: {str(e)}")
             continue
     
-    portfolio_value_df.iloc[1:] = portfolio_value_df.iloc[1:].replace(0, np.nan).ffill()
+    # Drop rows with zero values (non-trading days)
+    portfolio_value_df = portfolio_value_df[portfolio_value_df['Total Value'] > 0]
+    
+    # Fill any remaining NaN values with the previous day's value
+    portfolio_value_df = portfolio_value_df.fillna(method='ffill')
     
     return portfolio_value_df
 
