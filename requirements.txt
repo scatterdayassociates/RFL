@@ -6,3 +6,5 @@ pyppeteer
 nest_asyncio
 reportlab
 streamlit-modal
+protobuf<=3.20.3
+
