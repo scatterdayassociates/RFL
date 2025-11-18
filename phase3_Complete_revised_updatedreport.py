@@ -617,15 +617,78 @@ def execute_trade(selected_ticker, recommended_ticker):
                 # It's already a ticker from IndexAlign, use it directly
                 new_ticker = recommended_ticker
             
+            # Get the row data to preserve Units and Purchase Date
+            row_data = updated_df.loc[mask].iloc[0]
+            units = float(row_data['Units'])
+            purchase_date = row_data['Purchase Date']
+            
+            # Fetch new stock data
             new_stock = yf.Ticker(new_ticker)
             new_price = new_stock.info.get('currentPrice', 0)
-
-            # Update portfolio
-            updated_df.loc[mask, 'Stock'] = new_ticker
-            updated_df.loc[mask, 'Current Price ($)'] = f"{new_price:.2f}"
-            st.session_state.portfolio_df = updated_df
+            
+            # Get purchase price for the new stock on the purchase date
+            try:
+                hist = new_stock.history(start=purchase_date)
+                if not hist.empty:
+                    purchase_price = hist.iloc[0]['Close']
+                else:
+                    purchase_price = new_price  # Fallback to current price
+            except:
+                purchase_price = new_price  # Fallback to current price
+            
+            # Calculate financial metrics
+            initial_investment = purchase_price * units
+            current_value = new_price * units
+            gain_loss = current_value - initial_investment
+            gain_loss_percentage = (gain_loss / initial_investment) * 100 if initial_investment > 0 else 0
+            
+            # Get sector and harm score data
+            gics_sector = get_gics_sector(new_ticker)
+            sector_harm_score = get_sector_harm_score(gics_sector)
+            normalized_score_graph = get_normalized_score_graph1(gics_sector) or np.random.uniform(0, 1)
+            
+            # Fetch IndexAlign DEI data
+            indexalign_data = get_indexalign_data(new_ticker)
+            
+            # Get the index of the row to update
+            row_idx = updated_df[mask].index[0]
+            
+            # Update the row with all new data using .at for single cell updates
+            updated_df.at[row_idx, 'Stock'] = new_ticker
+            updated_df.at[row_idx, 'Current Price ($)'] = f"{new_price:.2f}"
+            updated_df.at[row_idx, 'Purchase Price ($)'] = f"{purchase_price:.2f}"
+            updated_df.at[row_idx, 'Initial Investment ($)'] = f"{initial_investment:.2f}"
+            updated_df.at[row_idx, 'Current Value ($)'] = f"{current_value:.2f}"
+            updated_df.at[row_idx, 'Gain/Loss ($)'] = f"{gain_loss:.2f}"
+            updated_df.at[row_idx, 'Gain/Loss %'] = gain_loss_percentage
+            updated_df.at[row_idx, 'GICS Sector'] = gics_sector
+            updated_df.at[row_idx, 'Sector Harm Score'] = sector_harm_score
+            updated_df.at[row_idx, 'Normalized Harm Score Graph'] = normalized_score_graph
+            updated_df.at[row_idx, 'IndexAlign DEI Pro %'] = indexalign_data['pro'] if indexalign_data['pro'] is not None else 'N/A'
+            updated_df.at[row_idx, 'IndexAlign DEI Neutral %'] = indexalign_data['neutral'] if indexalign_data['neutral'] is not None else 'N/A'
+            updated_df.at[row_idx, 'IndexAlign DEI Against %'] = indexalign_data['against'] if indexalign_data['against'] is not None else 'N/A'
+            
+            # Ensure the dataframe is properly updated
+            st.session_state.portfolio_df = updated_df.copy()
+            
+            # Recalculate harm score contributions for all stocks
+            total_portfolio_harm_units = (
+                st.session_state.portfolio_df['Normalized Harm Score Graph'].astype(float) * 
+                st.session_state.portfolio_df['Units'].astype(float)
+            ).sum()
+            
+            st.session_state.portfolio_df['Portfolio Harm Contribution'] = (
+                st.session_state.portfolio_df['Normalized Harm Score Graph'].astype(float) * 
+                st.session_state.portfolio_df['Units'].astype(float) / 
+                total_portfolio_harm_units * 100
+            )
+            
+            # Update portfolio allocation and historical data
             st.session_state.portfolio_df = update_portfolio_allocation(st.session_state.portfolio_df)
             st.session_state.historical_value_df = calculate_historical_portfolio_value(st.session_state.portfolio_df)
+            
+            # Clear optimized portfolio since it's now outdated
+            st.session_state.optimized_portfolio_df = None
 
             st.success(f"Replaced {selected_ticker} with {new_ticker}.")
         else:
@@ -907,8 +970,16 @@ if modal.is_open():
 # Portfolio Summary and Analysis (Before Optimization)
 st.subheader("Portfolio Summary and Analysis")
 if not st.session_state.portfolio_df.empty:
-    portfolio_value = st.session_state.portfolio_df['Current Value ($)'].astype(float).sum()
-    total_gain_loss = st.session_state.portfolio_df['Gain/Loss ($)'].astype(float).sum()
+    # Convert to numeric, handling string values with dollar signs and commas
+    portfolio_value = pd.to_numeric(
+        st.session_state.portfolio_df['Current Value ($)'].astype(str).str.replace('$', '').str.replace(',', ''), 
+        errors='coerce'
+    ).fillna(0).sum()
+    
+    total_gain_loss = pd.to_numeric(
+        st.session_state.portfolio_df['Gain/Loss ($)'].astype(str).str.replace('$', '').str.replace(',', ''), 
+        errors='coerce'
+    ).fillna(0).sum()
     
     # Calculate Weighted Average Harm Score
     # Multiply Units × Sector Harm Score for each stock, then sum and divide by total units
@@ -1525,11 +1596,11 @@ if st.session_state.optimized_portfolio_df is not None:
         st.metric("Weighted Average RFL Corporate Racial Justice Score", 
               f"{optimized_weighted_avg_harm_score:.2f}", 
               delta=f"{harm_score_change:.2f}", 
-              delta_color="inverse" if harm_score_change > 0 else "normal")
+              delta_color="normal" if harm_score_change > 0 else "inverse")
         # Display percentage change with arrow
         if harm_score_pct_change != 0:
             arrow = "↓" if harm_score_pct_change < 0 else "↑"  # Down arrow is good (lower harm), up arrow is bad
-            color = "green" if harm_score_pct_change < 0 else "red"  # Green for reduction, red for increase
+            color = "green" if harm_score_pct_change > 0 else "red"  # Green for increase, red for decrease
             st.markdown(f'<span class="portfolio-percentage" style="color: {color}; font-size: 20px;">{arrow} {abs(harm_score_pct_change):.2f}%</span>', unsafe_allow_html=True)
         else:
             st.markdown('<span class="portfolio-percentage" style="color: gray; font-size: 20px;">→ 0.00%</span>', unsafe_allow_html=True)
