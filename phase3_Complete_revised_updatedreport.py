@@ -609,7 +609,14 @@ def execute_trade(selected_ticker, recommended_ticker):
         mask = updated_df['Stock'] == selected_ticker
     
         if mask.any():
-            new_ticker = company_ticker_dict[recommended_ticker]
+            # Check if recommended_ticker is a company name (needs conversion) or already a ticker
+            if recommended_ticker in company_ticker_dict:
+                # It's a company name from asyousowrj, convert to ticker
+                new_ticker = company_ticker_dict[recommended_ticker]
+            else:
+                # It's already a ticker from IndexAlign, use it directly
+                new_ticker = recommended_ticker
+            
             new_stock = yf.Ticker(new_ticker)
             new_price = new_stock.info.get('currentPrice', 0)
 
@@ -620,7 +627,7 @@ def execute_trade(selected_ticker, recommended_ticker):
             st.session_state.portfolio_df = update_portfolio_allocation(st.session_state.portfolio_df)
             st.session_state.historical_value_df = calculate_historical_portfolio_value(st.session_state.portfolio_df)
 
-            st.success(f"Replaced {selected_ticker} with {recommended_ticker}.")
+            st.success(f"Replaced {selected_ticker} with {new_ticker}.")
         else:
             st.error(f"{selected_ticker} not found in portfolio.")
 
@@ -630,22 +637,39 @@ def execute_trade(selected_ticker, recommended_ticker):
 
 
 def load_recommendations():
-    """Fetch recommendations from indexaligncorporate table where Pro > 85% for matching sector."""
+    """Fetch recommendations from both asyousowrj and indexaligncorporate tables."""
          
     conn = sqlite3.connect('nycprocurement.db')
     
     recommendations = {}
     for _, row in st.session_state.portfolio_df.iterrows():
         stock_ticker = row['Stock']
+        sector = row['GICS Sector']
         
+        # Initialize recommendations list for this stock
+        recommendations[stock_ticker] = []
+
+        # Method 1: Query recommendation from asyousowrj table
+        query = "SELECT * FROM asyousowrj WHERE Sector = ? AND Category = 'Leader'"
+        cursor = conn.cursor()
+        cursor.execute(query, (sector,))
+        result = cursor.fetchone()
+
+        # Store asyousowrj recommendation
+        recommendations[stock_ticker].append({
+            'recommended_ticker': result[0] if result else 'NA',
+            'recommending_source': result[6] if result else 'NA',
+            'distinction_signal': result[1] if result else 'NA'
+        })
+        
+        # Method 2: Query recommendation from indexaligncorporate table
         # Step 1: Fetch sector from indexaligncorporate using ticker
         sector_query = "SELECT Sector FROM indexaligncorporate WHERE Ticker = ?"
-        cursor = conn.cursor()
         cursor.execute(sector_query, (stock_ticker,))
         sector_result = cursor.fetchone()
         
         if sector_result:
-            sector = sector_result[0]
+            indexalign_sector = sector_result[0]
             
             # Step 2: Find tickers in the same sector with Pro > 85%
             # Handle VARCHAR Pro column that may contain percentage values, spaces, commas, etc.
@@ -657,29 +681,29 @@ def load_recommendations():
                 AND CAST(REPLACE(REPLACE(REPLACE(Pro, '%', ''), ' ', ''), ',', '') AS REAL) > 85
                 LIMIT 1
             """
-            cursor.execute(recommendation_query, (sector, stock_ticker))
+            cursor.execute(recommendation_query, (indexalign_sector, stock_ticker))
             result = cursor.fetchone()
             
-            # Store recommendations
+            # Store indexaligncorporate recommendation
             if result:
-                recommendations[stock_ticker] = {
+                recommendations[stock_ticker].append({
                     'recommended_ticker': result[0] if result[0] else 'NA',  # Ticker
                     'recommending_source': 'IndexAlign Corporate Political Giving',
                     'distinction_signal': 'Recipients > 85% Pro-DEI Voting'
-                }
+                })
             else:
-                recommendations[stock_ticker] = {
+                recommendations[stock_ticker].append({
                     'recommended_ticker': 'NA',
-                    'recommending_source': 'NA',
+                    'recommending_source': 'IndexAlign Corporate Political Giving',
                     'distinction_signal': 'NA'
-                }
+                })
         else:
-            # If ticker not found in indexaligncorporate, return NA
-            recommendations[stock_ticker] = {
+            # If ticker not found in indexaligncorporate, still add entry with NA
+            recommendations[stock_ticker].append({
                 'recommended_ticker': 'NA',
-                'recommending_source': 'NA',
+                'recommending_source': 'IndexAlign Corporate Political Giving',
                 'distinction_signal': 'NA'
-            }
+            })
 
     conn.close()
     return recommendations
@@ -815,29 +839,34 @@ if modal.is_open():
         # Close the table HTML opening to display it
         st.markdown(table_html, unsafe_allow_html=True)
         
-        # Generate rows with data and checkboxes
-        for i, (stock_ticker, recommendation) in enumerate(recommendations.items(), 1):
+        # Generate rows with data and checkboxes - display both recommendations as separate rows
+        row_counter = 0
+        for stock_ticker, recommendation_list in recommendations.items():
             sector = st.session_state.portfolio_df.loc[st.session_state.portfolio_df['Stock'] == stock_ticker, 'GICS Sector'].values[0]
-            recommended_ticker = recommendation['recommended_ticker']
-            recommending_source = recommendation['recommending_source']
-            distinction_signal = recommendation['distinction_signal']
             
-            # Create row with columns (removed Rank column)
-            cols = st.columns([1, 1, 1, 1.5, 1, 0.7])
-            
-            # Display values in columns
-            cols[0].write(stock_ticker)
-            cols[1].write(sector)
-            cols[2].write(recommended_ticker)
-            cols[3].write(recommending_source)
-            cols[4].write(distinction_signal)
-            
-            # Add checkbox in the last column
-            execute_key = f"execute_{stock_ticker}"
-            if cols[5].checkbox("", key=execute_key):
-                st.session_state.selected_trades.add(stock_ticker)
-            else:
-                st.session_state.selected_trades.discard(stock_ticker)
+            # Display each recommendation as a separate, independent row
+            for rec_idx, recommendation in enumerate(recommendation_list):
+                row_counter += 1
+                recommended_ticker = recommendation['recommended_ticker']
+                recommending_source = recommendation['recommending_source']
+                distinction_signal = recommendation['distinction_signal']
+                
+                # Create row with columns (removed Rank column)
+                cols = st.columns([1, 1, 1, 1.5, 1, 0.7])
+                
+                # Display values in columns - each row is independent
+                cols[0].write(stock_ticker)
+                cols[1].write(sector)
+                cols[2].write(recommended_ticker)
+                cols[3].write(recommending_source)
+                cols[4].write(distinction_signal)
+                
+                # Add checkbox in the last column
+                execute_key = f"execute_{stock_ticker}_{rec_idx}_{row_counter}"
+                if cols[5].checkbox("", key=execute_key):
+                    st.session_state.selected_trades.add((stock_ticker, recommended_ticker, rec_idx))
+                else:
+                    st.session_state.selected_trades.discard((stock_ticker, recommended_ticker, rec_idx))
         
         # Close table HTML
         st.markdown('</tbody></table></div>', unsafe_allow_html=True)
@@ -850,8 +879,18 @@ if modal.is_open():
                     st.warning("No trades selected!")
                 else:
                     with st.spinner("Executing trades..."):
-                        for stock in list(st.session_state.selected_trades):
-                            recommended_ticker = recommendations.get(stock, {}).get('recommended_ticker')
+                        for trade_info in list(st.session_state.selected_trades):
+                            # trade_info is a tuple: (stock_ticker, recommended_ticker, rec_idx)
+                            if isinstance(trade_info, tuple) and len(trade_info) == 3:
+                                stock, recommended_ticker, rec_idx = trade_info
+                            else:
+                                # Handle old format for backward compatibility
+                                stock = trade_info
+                                stock_recommendations = recommendations.get(stock, [])
+                                if stock_recommendations:
+                                    recommended_ticker = stock_recommendations[0].get('recommended_ticker', 'NA')
+                                else:
+                                    recommended_ticker = 'NA'
                             
                             if recommended_ticker and recommended_ticker != "NA":
                                 st.success(f"Executing trade: {stock} → {recommended_ticker}")
@@ -870,15 +909,30 @@ st.subheader("Portfolio Summary and Analysis")
 if not st.session_state.portfolio_df.empty:
     portfolio_value = st.session_state.portfolio_df['Current Value ($)'].astype(float).sum()
     total_gain_loss = st.session_state.portfolio_df['Gain/Loss ($)'].astype(float).sum()
+    
+    # Calculate Weighted Average Harm Score
+    # Multiply Units × Sector Harm Score for each stock, then sum and divide by total units
+    units = st.session_state.portfolio_df['Units'].astype(float)
+    sector_harm_scores = st.session_state.portfolio_df['Sector Harm Score'].astype(float)
+    total_units = units.sum()
+    
+    if total_units > 0:
+        weighted_avg_harm_score = (units * sector_harm_scores).sum() / total_units
+    else:
+        weighted_avg_harm_score = 0
 
-    # Display total portfolio value and total gain/loss
-    col1, col2 = st.columns(2)
+    # Display total portfolio value, total gain/loss, and weighted average harm score
+    col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("Total Portfolio Value", f"${portfolio_value:,.2f}")
 
     with col2:
         st.metric("Total Portfolio Gain/Loss", 
               f"${total_gain_loss:,.2f}")
+    
+    with col3:
+        st.metric("Weighted Average Harm Score", 
+              f"{weighted_avg_harm_score:.2f}")
 
 else:
     st.info("Add stocks to your portfolio to see analysis.")
@@ -1058,7 +1112,13 @@ if not st.session_state.portfolio_df.empty:
             st.plotly_chart(fig3, key="original_value_contribution_chart")
     
     # Chart 2: IndexAlign Political Giving DEI Voting Record
-    indexalign_df = st.session_state.portfolio_df[['IndexAlign DEI Pro %', 'IndexAlign DEI Neutral %', 'IndexAlign DEI Against %']].copy()
+    indexalign_df = st.session_state.portfolio_df[['Stock', 'IndexAlign DEI Pro %', 'IndexAlign DEI Neutral %', 'IndexAlign DEI Against %', 'Current Value ($)']].copy()
+    
+    # Convert Current Value to numeric for weighting
+    indexalign_df['Current Value ($)'] = pd.to_numeric(
+        indexalign_df['Current Value ($)'].astype(str).str.replace('$', '').str.replace(',', ''), 
+        errors='coerce'
+    ).fillna(0)
     
     # Convert to numeric, handling 'N/A' and string values
     def convert_to_numeric(val):
@@ -1076,28 +1136,34 @@ if not st.session_state.portfolio_df.empty:
     indexalign_df['Neutral'] = indexalign_df['IndexAlign DEI Neutral %'].apply(convert_to_numeric)
     indexalign_df['Against'] = indexalign_df['IndexAlign DEI Against %'].apply(convert_to_numeric)
     
-    # Calculate averages (excluding None/NaN values)
-    # Filter out None/NaN values before calculating mean
-    pro_values = indexalign_df['Pro'].dropna()
+    # Calculate weighted average for Pro (weighted by Current Value)
+    # Filter out rows where Pro is None/NaN
+    pro_mask = indexalign_df['Pro'].notna()
+    if pro_mask.any():
+        total_value = indexalign_df.loc[pro_mask, 'Current Value ($)'].sum()
+        if total_value > 0:
+            weighted_avg_pro = (indexalign_df.loc[pro_mask, 'Pro'] * indexalign_df.loc[pro_mask, 'Current Value ($)']).sum() / total_value
+        else:
+            weighted_avg_pro = 0
+    else:
+        weighted_avg_pro = 0
+    
+    # Calculate simple averages for Neutral and Against (excluding None/NaN values)
     neutral_values = indexalign_df['Neutral'].dropna()
     against_values = indexalign_df['Against'].dropna()
     
-    avg_pro = pro_values.mean() if len(pro_values) > 0 else 0
     avg_neutral = neutral_values.mean() if len(neutral_values) > 0 else 0
     avg_against = against_values.mean() if len(against_values) > 0 else 0
     
     # Divide by 100 to convert percentage to decimal (as per requirement: AVERAGE(...)/100%)
-    # If values are already in decimal form (0-1), this will make them smaller
-    # If values are in percentage form (0-100), this will convert to decimal
-    # Then we'll multiply by 100 again for the pie chart display
-    avg_pro_decimal = avg_pro / 100 if avg_pro > 0 else 0
+    weighted_avg_pro_decimal = weighted_avg_pro / 100 if weighted_avg_pro > 0 else 0
     avg_neutral_decimal = avg_neutral / 100 if avg_neutral > 0 else 0
     avg_against_decimal = avg_against / 100 if avg_against > 0 else 0
     
     # Normalize to percentages for pie chart (ensure they sum to 100%)
-    total_avg = avg_pro_decimal + avg_neutral_decimal + avg_against_decimal
+    total_avg = weighted_avg_pro_decimal + avg_neutral_decimal + avg_against_decimal
     if total_avg > 0:
-        avg_pro_pct = (avg_pro_decimal / total_avg) * 100
+        avg_pro_pct = (weighted_avg_pro_decimal / total_avg) * 100
         avg_neutral_pct = (avg_neutral_decimal / total_avg) * 100
         avg_against_pct = (avg_against_decimal / total_avg) * 100
     else:
@@ -1272,7 +1338,13 @@ if st.session_state.optimized_portfolio_df is not None:
             st.plotly_chart(fig5, key="optimized_value_contribution_chart")
     
     # Chart 2: IndexAlign Political Giving DEI Voting Record (Optimized)
-    optimized_indexalign_df = st.session_state.optimized_portfolio_df[['IndexAlign DEI Pro %', 'IndexAlign DEI Neutral %', 'IndexAlign DEI Against %']].copy()
+    optimized_indexalign_df = st.session_state.optimized_portfolio_df[['Stock', 'IndexAlign DEI Pro %', 'IndexAlign DEI Neutral %', 'IndexAlign DEI Against %', 'Current Value ($)']].copy()
+    
+    # Convert Current Value to numeric for weighting
+    optimized_indexalign_df['Current Value ($)'] = pd.to_numeric(
+        optimized_indexalign_df['Current Value ($)'].astype(str).str.replace('$', '').str.replace(',', ''), 
+        errors='coerce'
+    ).fillna(0)
     
     # Convert to numeric, handling 'N/A' and string values
     def convert_to_numeric_optimized(val):
@@ -1290,25 +1362,34 @@ if st.session_state.optimized_portfolio_df is not None:
     optimized_indexalign_df['Neutral'] = optimized_indexalign_df['IndexAlign DEI Neutral %'].apply(convert_to_numeric_optimized)
     optimized_indexalign_df['Against'] = optimized_indexalign_df['IndexAlign DEI Against %'].apply(convert_to_numeric_optimized)
     
-    # Calculate averages (excluding None/NaN values)
-    # Filter out None/NaN values before calculating mean
-    optimized_pro_values = optimized_indexalign_df['Pro'].dropna()
+    # Calculate weighted average for Pro (weighted by Current Value)
+    # Filter out rows where Pro is None/NaN
+    optimized_pro_mask = optimized_indexalign_df['Pro'].notna()
+    if optimized_pro_mask.any():
+        optimized_total_value = optimized_indexalign_df.loc[optimized_pro_mask, 'Current Value ($)'].sum()
+        if optimized_total_value > 0:
+            optimized_weighted_avg_pro = (optimized_indexalign_df.loc[optimized_pro_mask, 'Pro'] * optimized_indexalign_df.loc[optimized_pro_mask, 'Current Value ($)']).sum() / optimized_total_value
+        else:
+            optimized_weighted_avg_pro = 0
+    else:
+        optimized_weighted_avg_pro = 0
+    
+    # Calculate simple averages for Neutral and Against (excluding None/NaN values)
     optimized_neutral_values = optimized_indexalign_df['Neutral'].dropna()
     optimized_against_values = optimized_indexalign_df['Against'].dropna()
     
-    optimized_avg_pro = optimized_pro_values.mean() if len(optimized_pro_values) > 0 else 0
     optimized_avg_neutral = optimized_neutral_values.mean() if len(optimized_neutral_values) > 0 else 0
     optimized_avg_against = optimized_against_values.mean() if len(optimized_against_values) > 0 else 0
     
     # Divide by 100 to convert percentage to decimal (as per requirement: AVERAGE(...)/100%)
-    optimized_avg_pro_decimal = optimized_avg_pro / 100 if optimized_avg_pro > 0 else 0
+    optimized_weighted_avg_pro_decimal = optimized_weighted_avg_pro / 100 if optimized_weighted_avg_pro > 0 else 0
     optimized_avg_neutral_decimal = optimized_avg_neutral / 100 if optimized_avg_neutral > 0 else 0
     optimized_avg_against_decimal = optimized_avg_against / 100 if optimized_avg_against > 0 else 0
     
     # Normalize to percentages for pie chart (ensure they sum to 100%)
-    optimized_total_avg = optimized_avg_pro_decimal + optimized_avg_neutral_decimal + optimized_avg_against_decimal
+    optimized_total_avg = optimized_weighted_avg_pro_decimal + optimized_avg_neutral_decimal + optimized_avg_against_decimal
     if optimized_total_avg > 0:
-        optimized_avg_pro_pct = (optimized_avg_pro_decimal / optimized_total_avg) * 100
+        optimized_avg_pro_pct = (optimized_weighted_avg_pro_decimal / optimized_total_avg) * 100
         optimized_avg_neutral_pct = (optimized_avg_neutral_decimal / optimized_total_avg) * 100
         optimized_avg_against_pct = (optimized_avg_against_decimal / optimized_total_avg) * 100
     else:
@@ -1346,7 +1427,7 @@ if st.session_state.optimized_portfolio_df is not None:
     total_gain_loss = st.session_state.portfolio_df['Gain/Loss ($)'].astype(float).sum()
     st.subheader("Portfolio Summary (Harm Reduction Optimized)")
     
-    # Add CSS to reduce vertical margins
+    # Add CSS to reduce vertical margins and set consistent font size for delta and percentage
     st.markdown("""
         <style>
         .portfolio-metric-container {
@@ -1356,11 +1437,51 @@ if st.session_state.optimized_portfolio_df is not None:
             margin-top: -15px !important;
             margin-bottom: 5px !important;
             display: block;
+            font-size: 20px !important;
+        }
+        /* Set delta (increased/decreased) font size to match percentage */
+        div[data-testid="stMetric"] div[data-testid="stMetricDelta"],
+        div[data-testid="stMetric"] div[data-testid="stMetricDelta"] span,
+        div[data-testid="stMetric"] div[data-testid="stMetricDelta"] div {
+            font-size: 20px !important;
+            font-weight: 600 !important;
+        }
+        div[data-testid="stMetric"] div[data-testid="stMetricDelta"] svg {
+            width: 20px !important;
+            height: 20px !important;
+        }
+        /* Alternative selector for delta values */
+        .stMetric [data-testid="stMetricDelta"] {
+            font-size: 20px !important;
         }
         </style>
     """, unsafe_allow_html=True)
     
-    col1, col2 = st.columns(2)
+    # Calculate Weighted Average Harm Score for optimized portfolio
+    optimized_units = st.session_state.optimized_portfolio_df['Units'].astype(float)
+    optimized_sector_harm_scores = st.session_state.optimized_portfolio_df['Sector Harm Score'].astype(float)
+    optimized_total_units = optimized_units.sum()
+    
+    if optimized_total_units > 0:
+        optimized_weighted_avg_harm_score = (optimized_units * optimized_sector_harm_scores).sum() / optimized_total_units
+    else:
+        optimized_weighted_avg_harm_score = 0
+    
+    # Calculate Weighted Average Harm Score for original portfolio (for comparison)
+    original_units = st.session_state.portfolio_df['Units'].astype(float)
+    original_sector_harm_scores = st.session_state.portfolio_df['Sector Harm Score'].astype(float)
+    original_total_units = original_units.sum()
+    
+    if original_total_units > 0:
+        original_weighted_avg_harm_score = (original_units * original_sector_harm_scores).sum() / original_total_units
+    else:
+        original_weighted_avg_harm_score = 0
+    
+    # Calculate harm score change
+    harm_score_change = optimized_weighted_avg_harm_score - original_weighted_avg_harm_score
+    harm_score_pct_change = ((optimized_weighted_avg_harm_score - original_weighted_avg_harm_score) / original_weighted_avg_harm_score * 100) if original_weighted_avg_harm_score > 0 else 0
+    
+    col1, col2, col3 = st.columns(3)
     portfolio_change = optimized_portfolio_value - portfolio_value
     
     # Calculate percentage changes
@@ -1379,9 +1500,9 @@ if st.session_state.optimized_portfolio_df is not None:
         if portfolio_value_pct_change != 0:
             arrow = "↑" if portfolio_value_pct_change > 0 else "↓"
             color = "green" if portfolio_value_pct_change > 0 else "red"
-            st.markdown(f'<span class="portfolio-percentage" style="color: {color}; font-size: 14px;">{arrow} {abs(portfolio_value_pct_change):.2f}%</span>', unsafe_allow_html=True)
+            st.markdown(f'<span class="portfolio-percentage" style="color: {color}; font-size: 20px;">{arrow} {abs(portfolio_value_pct_change):.2f}%</span>', unsafe_allow_html=True)
         else:
-            st.markdown('<span class="portfolio-percentage" style="color: gray; font-size: 14px;">→ 0.00%</span>', unsafe_allow_html=True)
+            st.markdown('<span class="portfolio-percentage" style="color: gray; font-size: 20px;">→ 0.00%</span>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
     with col2:
@@ -1394,9 +1515,24 @@ if st.session_state.optimized_portfolio_df is not None:
         if gain_loss_pct_change != 0:
             arrow = "↑" if gain_loss_pct_change > 0 else "↓"
             color = "green" if gain_loss_pct_change > 0 else "red"
-            st.markdown(f'<span class="portfolio-percentage" style="color: {color}; font-size: 14px;">{arrow} {abs(gain_loss_pct_change):.2f}%</span>', unsafe_allow_html=True)
+            st.markdown(f'<span class="portfolio-percentage" style="color: {color}; font-size: 20px;">{arrow} {abs(gain_loss_pct_change):.2f}%</span>', unsafe_allow_html=True)
         else:
-            st.markdown('<span class="portfolio-percentage" style="color: gray; font-size: 14px;">→ 0.00%</span>', unsafe_allow_html=True)
+            st.markdown('<span class="portfolio-percentage" style="color: gray; font-size: 20px;">→ 0.00%</span>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    with col3:
+        st.markdown('<div class="portfolio-metric-container">', unsafe_allow_html=True)
+        st.metric("Weighted Average Harm Score", 
+              f"{optimized_weighted_avg_harm_score:.2f}", 
+              delta=f"{harm_score_change:.2f}", 
+              delta_color="inverse" if harm_score_change > 0 else "normal")
+        # Display percentage change with arrow
+        if harm_score_pct_change != 0:
+            arrow = "↓" if harm_score_pct_change < 0 else "↑"  # Down arrow is good (lower harm), up arrow is bad
+            color = "green" if harm_score_pct_change < 0 else "red"  # Green for reduction, red for increase
+            st.markdown(f'<span class="portfolio-percentage" style="color: {color}; font-size: 20px;">{arrow} {abs(harm_score_pct_change):.2f}%</span>', unsafe_allow_html=True)
+        else:
+            st.markdown('<span class="portfolio-percentage" style="color: gray; font-size: 20px;">→ 0.00%</span>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
     
