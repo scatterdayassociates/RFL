@@ -931,7 +931,7 @@ if not st.session_state.portfolio_df.empty:
               f"${total_gain_loss:,.2f}")
     
     with col3:
-        st.metric("Weighted Average Harm Score", 
+        st.metric("Weighted Average RFL Corporate Racial Justice Score", 
               f"{weighted_avg_harm_score:.2f}")
 
 else:
@@ -1522,7 +1522,7 @@ if st.session_state.optimized_portfolio_df is not None:
     
     with col3:
         st.markdown('<div class="portfolio-metric-container">', unsafe_allow_html=True)
-        st.metric("Weighted Average Harm Score", 
+        st.metric("Weighted Average RFL Corporate Racial Justice Score", 
               f"{optimized_weighted_avg_harm_score:.2f}", 
               delta=f"{harm_score_change:.2f}", 
               delta_color="inverse" if harm_score_change > 0 else "normal")
