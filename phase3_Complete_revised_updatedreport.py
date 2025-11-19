@@ -176,7 +176,11 @@ def get_sector_harm_score(sector):
 def optimize_portfolio(df, max_harm_score, min_stock_threshold):
     """
     Optimize portfolio to maximize Rate of Return (RoR) by reallocating units among stocks,
-    subject to maximum harm score constraint and minimum stock holding threshold.
+    subject to:
+    - Minimum harm score constraint (optimized harm score must be >= max_harm_score)
+    - Minimum stock holding threshold
+    - Portfolio value must not decrease (must be >= original)
+    - Gain/Loss must not decrease (must be >= original)
     """
     
     # Prepare data
@@ -216,7 +220,7 @@ def optimize_portfolio(df, max_harm_score, min_stock_threshold):
         # Minimize negative RoR (which maximizes RoR)
         return -ror
   
-    # Constraint: Weighted harm score must be <= max_harm_score
+    # Constraint: Weighted harm score must be >= max_harm_score (minimum threshold)
     def harm_score_constraint(weights):
         new_values = weights * total_portfolio_value
         new_units = new_values / current_prices
@@ -225,9 +229,9 @@ def optimize_portfolio(df, max_harm_score, min_stock_threshold):
         if total_new_units <= 0:
             return -1000  # Invalid solution
         weighted_harm = np.sum(harm_scores * new_units) / total_new_units
-        # Constraint: weighted_harm <= max_harm_score
+        # Constraint: weighted_harm >= max_harm_score (minimum threshold)
         # Return value should be >= 0 for constraint satisfaction
-        return max_harm_score - weighted_harm
+        return weighted_harm - max_harm_score
   
     # Constraint: Total units must equal original total
     def units_constraint(weights):
@@ -244,6 +248,31 @@ def optimize_portfolio(df, max_harm_score, min_stock_threshold):
     def non_negative_weights_constraint(weights):
         return np.min(weights)
     
+    # Constraint: Portfolio value must not decrease (must be >= original)
+    def portfolio_value_constraint(weights):
+        new_values = weights * total_portfolio_value
+        new_units = new_values / current_prices
+        new_units = np.maximum(new_units, 0)  # Ensure non-negative
+        # Recalculate actual values with continuous units
+        actual_values = new_units * current_prices
+        actual_total = actual_values.sum()
+        # Constraint: actual_total >= total_portfolio_value
+        # Return value should be >= 0 for constraint satisfaction
+        return actual_total - total_portfolio_value
+    
+    # Constraint: Gain/Loss must not decrease (must be >= original)
+    def gain_loss_constraint(weights):
+        new_values = weights * total_portfolio_value
+        new_units = new_values / current_prices
+        new_units = np.maximum(new_units, 0)  # Ensure non-negative
+        # Recalculate actual values with continuous units
+        actual_values = new_units * current_prices
+        new_initial_investment = new_units * purchase_prices
+        new_total_return = np.sum(actual_values - new_initial_investment)
+        # Constraint: new_total_return >= initial_total_return
+        # Return value should be >= 0 for constraint satisfaction
+        return new_total_return - initial_total_return
+    
     # Calculate minimum weights based on minimum stock threshold
     min_weights = np.array((min_stock_threshold * current_prices) / total_portfolio_value)
     # Ensure min_weights don't exceed 1.0
@@ -251,10 +280,12 @@ def optimize_portfolio(df, max_harm_score, min_stock_threshold):
     
     # Build constraints list
     constraints = [
-        {"type": "ineq", "fun": harm_score_constraint},  # weighted_harm <= max_harm_score
+        {"type": "ineq", "fun": harm_score_constraint},  # weighted_harm >= max_harm_score (minimum threshold)
         {"type": "eq", "fun": units_constraint},         # total units = original total
         {"type": "eq", "fun": weight_sum_constraint},    # weights sum to 1.0
-        {"type": "ineq", "fun": non_negative_weights_constraint}  # all weights >= 0
+        {"type": "ineq", "fun": non_negative_weights_constraint},  # all weights >= 0
+        {"type": "ineq", "fun": portfolio_value_constraint},  # portfolio value >= original (must not decrease)
+        {"type": "ineq", "fun": gain_loss_constraint}  # gain/loss >= original (must not decrease)
     ]
     
     # Add minimum weight constraints for each stock
@@ -499,14 +530,28 @@ def optimize_portfolio(df, max_harm_score, min_stock_threshold):
             raise ValueError(
                 f"Optimization rejected: Portfolio value would decrease from ${total_portfolio_value:,.2f} "
                 f"to ${final_total_value:,.2f} (decrease of ${value_decrease:,.2f}). "
-                f"Optimization cannot proceed if it results in value loss."
+                f"Optimization cannot proceed if it results in value loss. "
+                f"Please adjust your constraints (minimum harm score threshold or minimum stock holding) to allow for a solution that maintains or increases portfolio value."
+            )
+        
+        # Prevent optimization if gain/loss decreases
+        gain_loss_decrease = initial_total_return - new_total_return
+        if gain_loss_decrease > 0.01:  # If gain/loss decreased by more than 1 cent, reject optimization
+            raise ValueError(
+                f"Optimization rejected: Portfolio gain/loss would decrease from ${initial_total_return:,.2f} "
+                f"to ${new_total_return:,.2f} (decrease of ${gain_loss_decrease:,.2f}). "
+                f"Optimization cannot proceed if it results in gain/loss reduction. "
+                f"Please adjust your constraints (minimum harm score threshold or minimum stock holding) to allow for a solution that maintains or increases gain/loss."
             )
         
         total_new_units = new_units.sum()
         if total_new_units > 0:
             weighted_harm = np.sum(harm_scores * new_units) / total_new_units
-            if weighted_harm > max_harm_score + 0.01:  # Small tolerance for floating point
-                raise ValueError(f"Optimization failed: Harm score {weighted_harm:.2f} exceeds maximum {max_harm_score:.2f}")
+            if weighted_harm < max_harm_score - 0.01:  # Small tolerance for floating point
+                raise ValueError(
+                    f"Optimization failed: Harm score {weighted_harm:.2f} is below minimum threshold {max_harm_score:.2f}. "
+                    f"Optimized portfolio harm score must be >= {max_harm_score:.2f}."
+                )
         else:
             raise ValueError("Optimization failed: Total units is zero")
         
@@ -828,7 +873,7 @@ if not st.session_state.portfolio_df.empty:
         )
 
         max_harm_score = st.number_input( 
-            "Set Maximum Harm Score Threshold",
+            "Set Minimum Harm Score Threshold",
             min_value=0.0,
             max_value=100.0,
             step=1.0,
@@ -1520,8 +1565,8 @@ if st.session_state.optimized_portfolio_df is not None:
         st.success(
         "**Portfolio Optimization Insight:**\n"
         "This rebalanced portfolio allocation maximizes total financial return while "
-        "minimizing the harm profile, or average weighted harm score, of the holdings "
-        "in your portfolio to the user-selected maximum harm threshold and required holding per stock. "
+        "ensuring the harm profile, or average weighted harm score, of the holdings "
+        "in your portfolio meets or exceeds the user-selected minimum harm threshold and required holding per stock. "
         "The harm profile score generation is powered by the RFL Racial Harm Score. "
         "The Score is generated at the GICS sector level. Racial harm, or disparate "
         "impact, is measured across a proprietary harm typology mapped to the "
