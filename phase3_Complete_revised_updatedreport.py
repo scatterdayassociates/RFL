@@ -174,7 +174,10 @@ def get_sector_harm_score(sector):
     return scores.iloc[0]['Min-Max-Norm'] if not scores.empty else None
 
 def optimize_portfolio(df, max_harm_score, min_stock_threshold):
-    
+    """
+    Optimize portfolio to maximize Rate of Return (RoR) by reallocating units among stocks,
+    subject to maximum harm score constraint and minimum stock holding threshold.
+    """
     
     # Prepare data
     current_prices = df['Current Price ($)'].astype(float)
@@ -186,61 +189,83 @@ def optimize_portfolio(df, max_harm_score, min_stock_threshold):
     
     total_portfolio_value = current_values.sum()
     initial_total_return = df['Gain/Loss ($)'].astype(float).sum()
+    initial_total_investment = df['Initial Investment ($)'].astype(float).sum()
+    initial_ror = (initial_total_return / initial_total_investment * 100) if initial_total_investment > 0 else 0
     total_units = current_units.sum()
     
+    # Ensure we have valid data
+    if total_units <= 0 or total_portfolio_value <= 0:
+        raise ValueError("Invalid portfolio: total units or portfolio value must be positive")
     
     initial_weights = current_values / total_portfolio_value
     
-  
+    # Objective: Maximize Rate of Return (minimize negative RoR)
     def objective(weights):
-        new_values = weights * total_portfolio_value  
-        return -np.sum(new_values)  
+        new_values = weights * total_portfolio_value
+        new_units = new_values / current_prices
+        # Ensure no negative units
+        new_units = np.maximum(new_units, 0)
+        new_initial_investment = new_units * purchase_prices
+        new_total_return = np.sum(new_values - new_initial_investment)
+        new_total_investment = np.sum(new_initial_investment)
+        # Calculate RoR as percentage
+        if new_total_investment > 0:
+            ror = (new_total_return / new_total_investment) * 100
+        else:
+            ror = -1000  # Penalty for invalid solution
+        # Minimize negative RoR (which maximizes RoR)
+        return -ror
   
-  
+    # Constraint: Weighted harm score must be <= max_harm_score
     def harm_score_constraint(weights):
         new_values = weights * total_portfolio_value
         new_units = new_values / current_prices
+        new_units = np.maximum(new_units, 0)  # Ensure non-negative
         total_new_units = new_units.sum()
+        if total_new_units <= 0:
+            return -1000  # Invalid solution
         weighted_harm = np.sum(harm_scores * new_units) / total_new_units
-        return weighted_harm - max_harm_score  
+        # Constraint: weighted_harm <= max_harm_score
+        # Return value should be >= 0 for constraint satisfaction
+        return max_harm_score - weighted_harm
   
- 
+    # Constraint: Total units must equal original total
     def units_constraint(weights):
         new_values = weights * total_portfolio_value
         new_units = new_values / current_prices
+        new_units = np.maximum(new_units, 0)  # Ensure non-negative
         return new_units.sum() - total_units 
     
-
+    # Constraint: Weights must sum to 1.0
     def weight_sum_constraint(weights):
         return np.sum(weights) - 1.0
     
-    def return_constraint(weights):
-        new_values = weights * total_portfolio_value
-        new_units = new_values / current_prices
-        new_initial_investment = new_units * purchase_prices
-        new_total_return = np.sum(new_values - new_initial_investment)
-        return new_total_return - initial_total_return
+    # Constraint: Ensure portfolio value stays positive (all weights >= 0)
+    def non_negative_weights_constraint(weights):
+        return np.min(weights)
     
-   
+    # Calculate minimum weights based on minimum stock threshold
     min_weights = np.array((min_stock_threshold * current_prices) / total_portfolio_value)
+    # Ensure min_weights don't exceed 1.0
+    min_weights = np.minimum(min_weights, 0.99)
     
-
+    # Build constraints list
     constraints = [
-        {"type": "ineq", "fun": harm_score_constraint}, 
-        {"type": "eq", "fun": units_constraint},         
-        {"type": "eq", "fun": weight_sum_constraint},    
-        {"type": "ineq", "fun": return_constraint}       
+        {"type": "ineq", "fun": harm_score_constraint},  # weighted_harm <= max_harm_score
+        {"type": "eq", "fun": units_constraint},         # total units = original total
+        {"type": "eq", "fun": weight_sum_constraint},    # weights sum to 1.0
+        {"type": "ineq", "fun": non_negative_weights_constraint}  # all weights >= 0
     ]
     
-
+    # Add minimum weight constraints for each stock
     for i in range(len(df)):
         constraints.append({
             "type": "ineq",
             "fun": lambda w, idx=i: w[idx] - min_weights[idx]
         })
     
-
-    bounds = [(0, 1.1)] * len(df)
+    # Bounds: weights between 0 and 1 (no need for 1.1 since we have weight sum constraint)
+    bounds = [(0, 1)] * len(df)
     
     # Run optimization
     result = minimize(
@@ -248,39 +273,259 @@ def optimize_portfolio(df, max_harm_score, min_stock_threshold):
         x0=initial_weights,
         bounds=bounds,
         constraints=constraints,
-        method='SLSQP'  
+        method='SLSQP',
+        options={'maxiter': 1000, 'ftol': 1e-6}
     )
     
     if result.success:
-    
         optimized_weights = result.x
         new_values = optimized_weights * total_portfolio_value
         new_units = new_values / current_prices
+        new_units = np.maximum(new_units, 0)  # Ensure non-negative
+        
+        # Adjust units to exactly match total_units (distribute rounding error)
+        current_total = new_units.sum()
+        if abs(current_total - total_units) > 0.01:
+            # Scale to match exactly
+            if current_total > 0:
+                new_units = new_units * (total_units / current_total)
+                # Recalculate values after scaling
+                new_values = new_units * current_prices
+            else:
+                raise ValueError("Optimization failed: All units became zero")
+        
+        # Smart rounding: Round units to preserve total portfolio value
+        # Use value-weighted rounding strategy
+        
+        # Calculate target values for each stock
+        target_values = new_values.copy()
+        
+        # Round units using value-preserving strategy
+        # For each stock, decide whether to round up or down based on value preservation
+        new_units_rounded = np.zeros(len(new_units), dtype=int)
+        total_rounded = 0
+        
+        # First pass: round each stock, prioritizing value preservation
+        for i in range(len(new_units)):
+            floor_units = int(np.floor(new_units[i]))
+            ceil_units = int(np.ceil(new_units[i]))
+            
+            floor_value = floor_units * current_prices[i]
+            ceil_value = ceil_units * current_prices[i]
+            target_value = target_values[i]
+            
+            # Choose rounding direction that preserves value better
+            floor_diff = abs(floor_value - target_value)
+            ceil_diff = abs(ceil_value - target_value)
+            
+            if floor_diff <= ceil_diff:
+                new_units_rounded[i] = floor_units
+            else:
+                new_units_rounded[i] = ceil_units
+            
+            total_rounded += new_units_rounded[i]
+        
+        # Adjust to match total units exactly
+        rounding_diff = int(total_units - total_rounded)
+        
+        if rounding_diff != 0:
+            # Calculate value impact of adding/removing one unit from each stock
+            current_rounded_values = new_units_rounded * current_prices
+            value_deviations = target_values - current_rounded_values
+            
+            if rounding_diff > 0:
+                # Need to add units - add to stocks where it best preserves target value
+                # Sort by how much adding a unit improves value match
+                improvements = []
+                for i in range(len(new_units_rounded)):
+                    if current_prices[i] > 0:
+                        # Value if we add one unit
+                        new_value = (new_units_rounded[i] + 1) * current_prices[i]
+                        improvement = abs(target_values[i] - new_value) - abs(value_deviations[i])
+                        improvements.append((improvement, i))
+                
+                # Sort by improvement (best first) and add units
+                improvements.sort(reverse=True)
+                for _, idx in improvements[:rounding_diff]:
+                    new_units_rounded[idx] += 1
+                    
+            else:
+                # Need to remove units - remove from stocks where it least hurts value match
+                # Sort by how much removing a unit worsens value match
+                deteriorations = []
+                for i in range(len(new_units_rounded)):
+                    if new_units_rounded[i] > 0:
+                        # Value if we remove one unit
+                        new_value = (new_units_rounded[i] - 1) * current_prices[i]
+                        deterioration = abs(target_values[i] - new_value) - abs(value_deviations[i])
+                        deteriorations.append((deterioration, i))
+                
+                # Sort by deterioration (least bad first) and remove units
+                deteriorations.sort()
+                for _, idx in deteriorations[:abs(rounding_diff)]:
+                    new_units_rounded[idx] = max(0, new_units_rounded[idx] - 1)
+        
+        new_units = new_units_rounded.astype(float)
+        
+        # Recalculate values with rounded units
+        new_values = new_units * current_prices
+        actual_total_value = new_values.sum()
+        
+        # If we still lost value, try one more optimization pass
+        value_loss = total_portfolio_value - actual_total_value
+        if value_loss > 0.01:  # Try to recover value loss
+            # Try swapping units between stocks to recover value
+            # Find stocks where we can gain value by adding a unit
+            sorted_by_price_high = np.argsort(current_prices)[::-1]
+            sorted_by_price_low = np.argsort(current_prices)
+            
+            max_iterations = 10  # Limit iterations
+            iteration = 0
+            while value_loss > 0.01 and iteration < max_iterations:
+                iteration += 1
+                best_swap = None
+                best_gain = 0
+                
+                # Find best swap: remove from low-price stock, add to high-price stock
+                for low_idx in sorted_by_price_low:
+                    if new_units[low_idx] <= 0:
+                        continue
+                    for high_idx in sorted_by_price_high:
+                        if high_idx == low_idx:
+                            continue
+                        # Value gain from swapping (removing from low, adding to high)
+                        gain = current_prices[high_idx] - current_prices[low_idx]
+                        if gain > best_gain:
+                            best_gain = gain
+                            best_swap = (low_idx, high_idx)
+                
+                if best_swap:
+                    low_idx, high_idx = best_swap
+                    new_units[low_idx] = max(0, new_units[low_idx] - 1)
+                    new_units[high_idx] += 1
+                    # Recalculate
+                    new_values = new_units * current_prices
+                    actual_total_value = new_values.sum()
+                    value_loss = total_portfolio_value - actual_total_value
+                else:
+                    break
+        
+        # Final recalculation
+        new_values = new_units * current_prices
+        actual_total_value = new_values.sum()
+        
+        # Final check: if value is still below target, make one more adjustment
+        # This ensures we don't lose value due to rounding
+        if actual_total_value < total_portfolio_value - 0.01:
+            # Calculate how much we need to recover
+            needed_recovery = total_portfolio_value - actual_total_value
+            
+            # Try to recover by finding the best unit adjustments
+            # Strategy: find stocks where we can gain value by adjusting units
+            # while maintaining total units constraint
+            
+            # Calculate value per unit for each stock
+            value_per_unit = current_prices
+            
+            # Find best opportunities: stocks with high value per unit that could use more units
+            # and stocks with low value per unit that could give up units
+            sorted_high = np.argsort(value_per_unit)[::-1]
+            sorted_low = np.argsort(value_per_unit)
+            
+            # Try to make adjustments that recover value
+            for attempt in range(5):  # Try up to 5 adjustments
+                if actual_total_value >= total_portfolio_value - 0.01:
+                    break
+                    
+                best_adjustment = None
+                best_recovery = 0
+                
+                # Look for swaps that recover value
+                for low_idx in sorted_low:
+                    if new_units[low_idx] <= 0:
+                        continue
+                    for high_idx in sorted_high:
+                        if high_idx == low_idx:
+                            continue
+                        # Recovery from swapping
+                        recovery = value_per_unit[high_idx] - value_per_unit[low_idx]
+                        if recovery > best_recovery and recovery <= needed_recovery + 0.01:
+                            best_recovery = recovery
+                            best_adjustment = (low_idx, high_idx)
+                
+                if best_adjustment:
+                    low_idx, high_idx = best_adjustment
+                    new_units[low_idx] = max(0, new_units[low_idx] - 1)
+                    new_units[high_idx] += 1
+                    # Recalculate
+                    new_values = new_units * current_prices
+                    actual_total_value = new_values.sum()
+                    needed_recovery = total_portfolio_value - actual_total_value
+                else:
+                    break
+        
+        # Final recalculation after all adjustments
+        new_values = new_units * current_prices
+        actual_total_value = new_values.sum()
+        
         new_initial_investment = new_units * purchase_prices
         new_total_return = np.sum(new_values - new_initial_investment)
         
-    
+        # Validation checks
         if abs(new_units.sum() - total_units) > 0.01:
-            raise ValueError("Optimization failed: Total units constraint not met")
+            raise ValueError(f"Optimization failed: Total units constraint not met. Expected {total_units}, got {new_units.sum()}")
+        
+        if np.any(new_units < 0):
+            raise ValueError("Optimization failed: Negative units detected")
+        
+        if np.any(new_values < 0):
+            raise ValueError("Optimization failed: Negative portfolio values detected")
+        
+        if np.any(new_initial_investment < 0):
+            raise ValueError("Optimization failed: Negative initial investment detected")
+        
+        # Ensure all values are positive
+        new_values = np.maximum(new_values, 0)
+        new_initial_investment = np.maximum(new_initial_investment, 0)
+        
+        # Final validation: ensure total value is reasonable and does not decrease
+        final_total_value = new_values.sum()
+        if final_total_value <= 0:
+            raise ValueError(f"Optimization failed: Total portfolio value is non-positive: {final_total_value}")
+        
+        # Prevent optimization if value decreases (allow only tiny tolerance for floating point errors)
+        value_decrease = total_portfolio_value - final_total_value
+        if value_decrease > 0.01:  # If value decreased by more than 1 cent, reject optimization
+            raise ValueError(
+                f"Optimization rejected: Portfolio value would decrease from ${total_portfolio_value:,.2f} "
+                f"to ${final_total_value:,.2f} (decrease of ${value_decrease:,.2f}). "
+                f"Optimization cannot proceed if it results in value loss."
+            )
         
         total_new_units = new_units.sum()
-        weighted_harm = np.sum(harm_scores * new_units) / total_new_units
-        if weighted_harm < max_harm_score:
-            raise ValueError("Optimization failed: Solution does not meet minimum harm score requirement")
+        if total_new_units > 0:
+            weighted_harm = np.sum(harm_scores * new_units) / total_new_units
+            if weighted_harm > max_harm_score + 0.01:  # Small tolerance for floating point
+                raise ValueError(f"Optimization failed: Harm score {weighted_harm:.2f} exceeds maximum {max_harm_score:.2f}")
+        else:
+            raise ValueError("Optimization failed: Total units is zero")
         
-
-        df['Portfolio Allocation'] = (optimized_weights / np.sum(optimized_weights)) * 100
-        df['Units'] = new_units.round()
-        # Recalculate Current Value using optimized units and current market prices
-        # This gives the actual market value of the optimized holdings
-        df['Current Value ($)'] = df['Units'] * current_prices
-        df['Initial Investment ($)'] = df['Units'] * purchase_prices
-        df['Gain/Loss ($)'] = df['Current Value ($)'] - df['Initial Investment ($)']
+        # Update dataframe
+        df['Portfolio Allocation'] = (new_values / new_values.sum() * 100) if new_values.sum() > 0 else 0
+        df['Units'] = new_units
+        df['Current Value ($)'] = new_values
+        df['Initial Investment ($)'] = new_initial_investment
+        # Calculate individual stock gain/loss
+        df['Gain/Loss ($)'] = new_values - new_initial_investment
         df['Gain/Loss %'] = (df['Gain/Loss ($)'] / df['Initial Investment ($)']) * 100
+        df['Gain/Loss %'] = df['Gain/Loss %'].fillna(0)
         
-       
+        # Recalculate harm contribution
         total_harm_units = (df['Units'] * df['Sector Harm Score']).sum()
-        df['Portfolio Harm Contribution'] = (df['Units'] * df['Sector Harm Score']) / total_harm_units * 100
+        if total_harm_units > 0:
+            df['Portfolio Harm Contribution'] = (df['Units'] * df['Sector Harm Score']) / total_harm_units * 100
+        else:
+            df['Portfolio Harm Contribution'] = 0
         
         return df
     else:
@@ -1623,11 +1868,11 @@ if st.session_state.optimized_portfolio_df is not None:
         st.metric("Weighted Average RFL Corporate Racial Justice Score", 
               f"{optimized_weighted_avg_harm_score:.2f}", 
               delta=f"{harm_score_change:.2f}", 
-              delta_color="normal" if harm_score_change > 0 else "inverse")
+              delta_color="normal")
         # Display percentage change with arrow
         if harm_score_pct_change != 0:
-            arrow = "↓" if harm_score_pct_change < 0 else "↑"  # Down arrow is good (lower harm), up arrow is bad
-            color = "green" if harm_score_pct_change > 0 else "red"  # Green for increase, red for decrease
+            arrow = "↓" if harm_score_pct_change < 0 else "↑"  # Down arrow for decrease, up arrow for increase
+            color = "red" if harm_score_pct_change < 0 else "green"  # Red for decrease, green for increase
             st.markdown(f'<span class="portfolio-percentage" style="color: {color}; font-size: 20px;">{arrow} {abs(harm_score_pct_change):.2f}%</span>', unsafe_allow_html=True)
         else:
             st.markdown('<span class="portfolio-percentage" style="color: gray; font-size: 20px;">→ 0.00%</span>', unsafe_allow_html=True)
