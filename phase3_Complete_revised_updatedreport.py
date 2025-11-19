@@ -193,20 +193,20 @@ def optimize_portfolio(df, max_harm_score, min_stock_threshold):
     
   
     def objective(weights):
-        new_values = weights * total_portfolio_value * 1.1  
+        new_values = weights * total_portfolio_value  
         return -np.sum(new_values)  
-    
+  
   
     def harm_score_constraint(weights):
-        new_values = weights * total_portfolio_value * 1.1
+        new_values = weights * total_portfolio_value
         new_units = new_values / current_prices
         total_new_units = new_units.sum()
         weighted_harm = np.sum(harm_scores * new_units) / total_new_units
         return weighted_harm - max_harm_score  
-    
+  
  
     def units_constraint(weights):
-        new_values = weights * total_portfolio_value * 1.1
+        new_values = weights * total_portfolio_value
         new_units = new_values / current_prices
         return new_units.sum() - total_units 
     
@@ -215,14 +215,14 @@ def optimize_portfolio(df, max_harm_score, min_stock_threshold):
         return np.sum(weights) - 1.0
     
     def return_constraint(weights):
-        new_values = weights * total_portfolio_value * 1.1
+        new_values = weights * total_portfolio_value
         new_units = new_values / current_prices
         new_initial_investment = new_units * purchase_prices
         new_total_return = np.sum(new_values - new_initial_investment)
         return new_total_return - initial_total_return
     
    
-    min_weights = np.array((min_stock_threshold * current_prices) / (total_portfolio_value * 1.1))
+    min_weights = np.array((min_stock_threshold * current_prices) / total_portfolio_value)
     
 
     constraints = [
@@ -254,7 +254,7 @@ def optimize_portfolio(df, max_harm_score, min_stock_threshold):
     if result.success:
     
         optimized_weights = result.x
-        new_values = optimized_weights * total_portfolio_value * 1.1
+        new_values = optimized_weights * total_portfolio_value
         new_units = new_values / current_prices
         new_initial_investment = new_units * purchase_prices
         new_total_return = np.sum(new_values - new_initial_investment)
@@ -270,8 +270,10 @@ def optimize_portfolio(df, max_harm_score, min_stock_threshold):
         
 
         df['Portfolio Allocation'] = (optimized_weights / np.sum(optimized_weights)) * 100
-        df['Current Value ($)'] = new_values
         df['Units'] = new_units.round()
+        # Recalculate Current Value using optimized units and current market prices
+        # This gives the actual market value of the optimized holdings
+        df['Current Value ($)'] = df['Units'] * current_prices
         df['Initial Investment ($)'] = df['Units'] * purchase_prices
         df['Gain/Loss ($)'] = df['Current Value ($)'] - df['Initial Investment ($)']
         df['Gain/Loss %'] = (df['Gain/Loss ($)'] / df['Initial Investment ($)']) * 100
@@ -1493,9 +1495,34 @@ if st.session_state.optimized_portfolio_df is not None:
             st.plotly_chart(fig6, key="optimized_indexalign_chart")
 
     # Optimized Portfolio Summary
-    optimized_portfolio_value = st.session_state.optimized_portfolio_df['Current Value ($)'].astype(float).sum()
-    optimized_total_gain_loss = st.session_state.optimized_portfolio_df['Gain/Loss ($)'].astype(float).sum()
-    total_gain_loss = st.session_state.portfolio_df['Gain/Loss ($)'].astype(float).sum()
+    # Calculate optimized portfolio value directly from the optimized portfolio dataframe
+    # Handle both numeric and string formats to ensure we get the exact values from the table
+    try:
+        # Try direct numeric conversion first (optimization function sets these as numeric)
+        optimized_portfolio_value = st.session_state.optimized_portfolio_df['Current Value ($)'].astype(float).sum()
+        optimized_total_gain_loss = st.session_state.optimized_portfolio_df['Gain/Loss ($)'].astype(float).sum()
+    except (ValueError, TypeError):
+        # Fallback to string parsing if values are formatted as strings
+        optimized_portfolio_value = pd.to_numeric(
+            st.session_state.optimized_portfolio_df['Current Value ($)'].astype(str).str.replace('$', '').str.replace(',', ''), 
+            errors='coerce'
+        ).fillna(0).sum()
+        optimized_total_gain_loss = pd.to_numeric(
+            st.session_state.optimized_portfolio_df['Gain/Loss ($)'].astype(str).str.replace('$', '').str.replace(',', ''), 
+            errors='coerce'
+        ).fillna(0).sum()
+    
+    # Calculate original portfolio value for comparison (handle string formats)
+    total_gain_loss = pd.to_numeric(
+        st.session_state.portfolio_df['Gain/Loss ($)'].astype(str).str.replace('$', '').str.replace(',', ''), 
+        errors='coerce'
+    ).fillna(0).sum()
+    
+    portfolio_value = pd.to_numeric(
+        st.session_state.portfolio_df['Current Value ($)'].astype(str).str.replace('$', '').str.replace(',', ''), 
+        errors='coerce'
+    ).fillna(0).sum()
+    
     st.subheader("Portfolio Summary (Harm Reduction Optimized)")
     
     # Add CSS to reduce vertical margins and set consistent font size for delta and percentage
