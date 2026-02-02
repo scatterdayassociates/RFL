@@ -10,3 +10,5 @@ nest_asyncio
 streamlit-modal
 reportlab
 protobuf<=3.20.3
+python-docx>=0.8.11
+streamlit[pdf]>=1.28.0
