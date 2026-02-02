@@ -1970,4 +1970,101 @@ if st.sidebar.button("Generate Report"):
         )
     else:
         st.sidebar.warning("Please add stocks to your portfolio first.")
+
+# Helper function to read disclaimer from .docx file
+def read_disclaimer_file(file_path):
+    """Read content from a .docx file and return as HTML/markdown"""
+    try:
+        from docx import Document
+        doc = Document(file_path)
+        content = []
+        for paragraph in doc.paragraphs:
+            if paragraph.text.strip():
+                content.append(paragraph.text)
+        return "\n\n".join(content)
+    except ImportError:
+        st.warning("python-docx library not installed. Please install it using: pip install python-docx")
+        return "Disclaimer file could not be loaded. Please ensure python-docx is installed."
+    except FileNotFoundError:
+        return f"Disclaimer file not found: {file_path}"
+    except Exception as e:
+        return f"Error reading disclaimer file: {str(e)}"
+
+# Helper function to render PDF pages
+def render_pdf_pages(pdf_path):
+    """Render PDF pages in Streamlit"""
+    try:
+        import base64
+        with open(pdf_path, "rb") as pdf_file:
+            pdf_bytes = pdf_file.read()
+            base64_pdf = base64.b64encode(pdf_bytes).decode('utf-8')
+            
+            # Provide download button
+            st.download_button(
+                label="📥 Download Methodology PDF",
+                data=pdf_bytes,
+                file_name=pdf_path,
+                mime="application/pdf"
+            )
+            
+            # Try to display PDF using iframe with base64 encoding
+            pdf_display = f'''
+            <iframe src="data:application/pdf;base64,{base64_pdf}" 
+                    width="100%" 
+                    height="800px" 
+                    type="application/pdf"
+                    style="border: 1px solid #ccc; margin-top: 10px;">
+            </iframe>
+            '''
+            st.markdown(pdf_display, unsafe_allow_html=True)
+            
+            # Fallback: try to extract and display text using PyPDF2 if iframe doesn't work
+            try:
+                import PyPDF2
+                with open(pdf_path, "rb") as pdf_file:
+                    pdf_reader = PyPDF2.PdfReader(pdf_file)
+                    with st.expander("📄 View PDF Text Content (Alternative)", expanded=False):
+                        text_content = ""
+                        for i, page in enumerate(pdf_reader.pages):
+                            page_text = page.extract_text()
+                            if page_text.strip():
+                                text_content += f"**Page {i+1}**\n\n{page_text}\n\n---\n\n"
+                        st.markdown(text_content)
+            except ImportError:
+                pass  # PyPDF2 not installed, skip text extraction
+            except Exception:
+                pass  # Text extraction failed, skip
+                
+    except FileNotFoundError:
+        st.error(f"PDF file not found: {pdf_path}")
+    except Exception as e:
+        st.error(f"Error loading PDF: {str(e)}")
+        # Try PyPDF2 as last resort
+        try:
+            import PyPDF2
+            with open(pdf_path, "rb") as pdf_file:
+                pdf_reader = PyPDF2.PdfReader(pdf_file)
+                st.info("PDF viewer not available. Extracted text content:")
+                text_content = ""
+                for i, page in enumerate(pdf_reader.pages):
+                    page_text = page.extract_text()
+                    if page_text.strip():
+                        text_content += f"**Page {i+1}**\n\n{page_text}\n\n---\n\n"
+                st.markdown(text_content)
+        except ImportError:
+            st.info("💡 Tip: Install PyPDF2 for text extraction: `pip install PyPDF2`")
+            st.info("📄 Use the download button above to view the full PDF document.")
+        except Exception as e2:
+            st.warning(f"Could not extract PDF text: {str(e2)}")
+            st.info("📄 Please use the download button above to view the PDF document.")
+
+# Legal Disclaimer and Score Methodology Section at the end
+st.subheader("Legal Disclaimer and Score Methodology", divider="blue")
+st.markdown(" ")
+with st.expander("Legal Disclaimer", expanded=False):
+    disclaimer_content = read_disclaimer_file("Kataly-Disclaimer.docx")
+    st.markdown(disclaimer_content, unsafe_allow_html=True)
+
+with st.expander("Score Methodology", expanded=False):
+    render_pdf_pages("Corporate Racial Equity Score - Methodology Statement (1).pdf")
     
