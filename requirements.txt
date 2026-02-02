@@ -4,7 +4,6 @@ pandas
 numpy
 plotly
 scipy
-pillow
 pyppeteer
 nest_asyncio
 streamlit-modal
@@ -15,3 +14,4 @@ PyMuPDF>=1.23.0
 Pillow>=9.0.0
 rapidfuzz>=2.0.0
 protobuf>=4.21.0
+
