@@ -2,6 +2,7 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
+import fitz
 import sqlite3
 import plotly.express as px
 import plotly.graph_objects as go
@@ -21,7 +22,7 @@ from datetime import datetime
 from io import BytesIO
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
-
+import io
 nest_asyncio.apply()
 
 st.set_page_config(layout="wide")
@@ -1991,49 +1992,40 @@ def read_disclaimer_file(file_path):
         return f"Error reading disclaimer file: {str(e)}"
 
 # Helper function to render PDF pages
-def render_pdf_pages(pdf_path):
-    """Render PDF pages in Streamlit"""
+def render_pdf_pages(file_path):
     try:
-        import base64
-        with open(pdf_path, "rb") as pdf_file:
-            pdf_bytes = pdf_file.read()
-            base64_pdf = base64.b64encode(pdf_bytes).decode('utf-8')
-            
-            # Provide download button
-            st.download_button(
-                label="📥 Download Methodology PDF",
-                data=pdf_bytes,
-                file_name=pdf_path,
-                mime="application/pdf"
-            )
-            
-            # Try to display PDF using iframe with base64 encoding
-            pdf_display = f'''
-            <iframe src="data:application/pdf;base64,{base64_pdf}" 
-                    width="100%" 
-                    height="800px" 
-                    type="application/pdf"
-                    style="border: 1px solid #ccc; margin-top: 10px;">
-            </iframe>
-            '''
-            st.markdown(pdf_display, unsafe_allow_html=True)
-            
-            # Fallback: try to extract and display text using PyPDF2 if iframe doesn't work
-            try:
-                import PyPDF2
-                with open(pdf_path, "rb") as pdf_file:
-                    pdf_reader = PyPDF2.PdfReader(pdf_file)
-                    with st.expander("📄 View PDF Text Content (Alternative)", expanded=False):
-                        text_content = ""
-                        for i, page in enumerate(pdf_reader.pages):
-                            page_text = page.extract_text()
-                            if page_text.strip():
-                                text_content += f"**Page {i+1}**\n\n{page_text}\n\n---\n\n"
-                        st.markdown(text_content)
-            except ImportError:
-                pass  # PyPDF2 not installed, skip text extraction
-            except Exception:
-                pass  # Text extraction failed, skip
+        # Open PDF
+        doc = fitz.open(file_path)
+
+        # Render scrollable container with fixed height
+        st.markdown("""
+            <style>
+            .pdf-scroll {
+                max-height: 500px;
+                overflow-y: scroll;
+                padding-right: 10px;
+                border: 1px solid #ccc;
+                background-color: #fff;
+            }
+            </style>
+            <div class="pdf-scroll">
+        """, unsafe_allow_html=True)
+
+        # Render pages inside scrollable container using st.image base64 technique
+        for page_num in range(len(doc)):
+            page = doc[page_num]
+            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))  # 2x zoom
+            img_data = pix.tobytes("png")
+            img = Image.open(io.BytesIO(img_data))
+            st.image(img, caption=f"Page {page_num + 1}", use_container_width=True)
+
+        # Close container
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        doc.close()
+
+    except Exception as e:
+        st.error(f"Error rendering PDF: {e}")
                 
     except FileNotFoundError:
         st.error(f"PDF file not found: {pdf_path}")
@@ -2059,12 +2051,12 @@ def render_pdf_pages(pdf_path):
             st.info("📄 Please use the download button above to view the PDF document.")
 
 # Legal Disclaimer and Score Methodology Section at the end
-st.subheader("Legal Disclaimer and Score Methodology", divider="blue")
+st.subheader(f"Legal Disclamer and Score Methodology", divider="blue")
 st.markdown(" ")
 with st.expander("Legal Disclaimer", expanded=False):
     disclaimer_content = read_disclaimer_file("Kataly-Disclaimer.docx")
     st.markdown(disclaimer_content, unsafe_allow_html=True)
-
+  
 with st.expander("Score Methodology", expanded=False):
     render_pdf_pages("Corporate Racial Equity Score - Methodology Statement (1).pdf")
     
