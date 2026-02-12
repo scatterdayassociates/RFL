@@ -26,7 +26,7 @@ import io
 nest_asyncio.apply()
 
 st.set_page_config(layout="wide")
-st.title("Racial Harm Portfolio Analyzer")
+st.title("Inclusive Investment Analysis Platform")
 # Function to execute trades
 def execute_trade(stock, recommended_ticker):
     # Placeholder for your trade execution logic
@@ -42,7 +42,7 @@ if 'portfolio_df' not in st.session_state:
     st.session_state.portfolio_df = pd.DataFrame(columns=[
         'Stock', 'Units', 'Purchase Date', 'Purchase Price ($)', 'Current Price ($)',
         'Initial Investment ($)', 'Current Value ($)', 'Gain/Loss ($)', 'Gain/Loss %', 
-        'Portfolio Allocation', 'GICS Sector','Sector Harm Score' ,'Portfolio Harm Contribution',
+        'Portfolio Allocation', 'GICS Sector','Sector Outcomes Index' ,'Portfolio Outcomes Score',
         'IndexAlign DEI Pro %', 'IndexAlign DEI Neutral %', 'IndexAlign DEI Against %'
     ])
 
@@ -178,7 +178,7 @@ def optimize_portfolio(df, max_harm_score, min_stock_threshold):
     """
     Optimize portfolio to maximize Rate of Return (RoR) by reallocating units among stocks,
     subject to:
-    - Minimum harm score constraint (optimized harm score must be >= max_harm_score)
+    - Minimum outcomes score constraint (optimized outcomes score must be >= max_harm_score)
     - Minimum stock holding threshold
     - Portfolio value must not decrease (must be >= original)
     - Gain/Loss must not decrease (must be >= original)
@@ -187,7 +187,7 @@ def optimize_portfolio(df, max_harm_score, min_stock_threshold):
     # Prepare data
     current_prices = df['Current Price ($)'].astype(float)
     returns = df['Gain/Loss %'].astype(float) / 100
-    harm_scores = df['Sector Harm Score'].astype(float)
+    harm_scores = df['Sector Outcomes Index'].astype(float)
     current_values = df['Current Value ($)'].astype(float)
     current_units = df['Units'].astype(float)
     purchase_prices = df['Purchase Price ($)'].astype(float)
@@ -221,7 +221,7 @@ def optimize_portfolio(df, max_harm_score, min_stock_threshold):
         # Minimize negative RoR (which maximizes RoR)
         return -ror
   
-    # Constraint: Weighted harm score must be >= max_harm_score (minimum threshold)
+    # Constraint: Weighted outcomes score must be >= max_harm_score (minimum threshold)
     def harm_score_constraint(weights):
         new_values = weights * total_portfolio_value
         new_units = new_values / current_prices
@@ -532,7 +532,7 @@ def optimize_portfolio(df, max_harm_score, min_stock_threshold):
                 f"Optimization rejected: Portfolio value would decrease from ${total_portfolio_value:,.2f} "
                 f"to ${final_total_value:,.2f} (decrease of ${value_decrease:,.2f}). "
                 f"Optimization cannot proceed if it results in value loss. "
-                f"Please adjust your constraints (minimum harm score threshold or minimum stock holding) to allow for a solution that maintains or increases portfolio value."
+                f"Please adjust your constraints (minimum outcomes score threshold or minimum stock holding) to allow for a solution that maintains or increases portfolio value."
             )
         
         # Prevent optimization if gain/loss decreases
@@ -542,7 +542,7 @@ def optimize_portfolio(df, max_harm_score, min_stock_threshold):
                 f"Optimization rejected: Portfolio gain/loss would decrease from ${initial_total_return:,.2f} "
                 f"to ${new_total_return:,.2f} (decrease of ${gain_loss_decrease:,.2f}). "
                 f"Optimization cannot proceed if it results in gain/loss reduction. "
-                f"Please adjust your constraints (minimum harm score threshold or minimum stock holding) to allow for a solution that maintains or increases gain/loss."
+                f"Please adjust your constraints (minimum outcomes score threshold or minimum stock holding) to allow for a solution that maintains or increases gain/loss."
             )
         
         total_new_units = new_units.sum()
@@ -550,8 +550,8 @@ def optimize_portfolio(df, max_harm_score, min_stock_threshold):
             weighted_harm = np.sum(harm_scores * new_units) / total_new_units
             if weighted_harm < max_harm_score - 0.01:  # Small tolerance for floating point
                 raise ValueError(
-                    f"Optimization failed: Harm score {weighted_harm:.2f} is below minimum threshold {max_harm_score:.2f}. "
-                    f"Optimized portfolio harm score must be >= {max_harm_score:.2f}."
+                    f"Optimization failed: Outcomes score {weighted_harm:.2f} is below minimum threshold {max_harm_score:.2f}. "
+                    f"Optimized portfolio outcomes score must be >= {max_harm_score:.2f}."
                 )
         else:
             raise ValueError("Optimization failed: Total units is zero")
@@ -566,12 +566,12 @@ def optimize_portfolio(df, max_harm_score, min_stock_threshold):
         df['Gain/Loss %'] = (df['Gain/Loss ($)'] / df['Initial Investment ($)']) * 100
         df['Gain/Loss %'] = df['Gain/Loss %'].fillna(0)
         
-        # Recalculate harm contribution
-        total_harm_units = (df['Units'] * df['Sector Harm Score']).sum()
+        # Recalculate outcomes score contribution
+        total_harm_units = (df['Units'] * df['Sector Outcomes Index']).sum()
         if total_harm_units > 0:
-            df['Portfolio Harm Contribution'] = (df['Units'] * df['Sector Harm Score']) / total_harm_units * 100
+            df['Portfolio Outcomes Score'] = (df['Units'] * df['Sector Outcomes Index']) / total_harm_units * 100
         else:
-            df['Portfolio Harm Contribution'] = 0
+            df['Portfolio Outcomes Score'] = 0
         
         return df
     else:
@@ -652,7 +652,7 @@ def calculate_portfolio_stats(df):
     df['Initial Investment ($)'] = pd.to_numeric(df['Initial Investment ($)'].astype(str).str.replace('$', ''), errors='coerce')
     df['Gain/Loss ($)'] = pd.to_numeric(df['Gain/Loss ($)'].astype(str).str.replace('$', ''), errors='coerce')
     df['Gain/Loss %'] = pd.to_numeric(df['Gain/Loss %'], errors='coerce')
-    df['Portfolio Harm Contribution'] = pd.to_numeric(df['Portfolio Harm Contribution'], errors='coerce')
+    df['Portfolio Outcomes Score'] = pd.to_numeric(df['Portfolio Outcomes Score'], errors='coerce')
     
     # Basic Portfolio Statistics
     stats['Start Value'] = df['Initial Investment ($)'].sum()
@@ -768,7 +768,7 @@ if submit_button:
                 normalized_score = get_normalized_score2(gics_sector) or np.random.uniform(0, 1)
                 normalized_score_graph = get_normalized_score_graph1(gics_sector) or np.random.uniform(0, 1)
                 
-                # Calculate total harm score units for existing portfolio
+                # Calculate total outcomes score units for existing portfolio
                 existing_harm_units = 0
                 if not st.session_state.portfolio_df.empty:
                     existing_harm_units = (
@@ -776,11 +776,11 @@ if submit_button:
                         st.session_state.portfolio_df['Units'].astype(float)
                     ).sum()
                 
-                # Add new stock's harm units
+                # Add new stock's outcomes score units
                 new_harm_units = normalized_score_graph * units
                 total_harm_units = existing_harm_units + new_harm_units
                 
-                # Calculate harm score contribution as percentage
+                # Calculate outcomes score contribution as percentage
                 harm_score_contribution = (new_harm_units / total_harm_units * 100) if total_harm_units > 0 else 0
 
                 sector_harm_score = get_sector_harm_score(gics_sector)
@@ -800,25 +800,25 @@ if submit_button:
                     'Gain/Loss %': [gain_loss_percentage],
                     'Portfolio Allocation': ["0.00%"],
                     'GICS Sector': [gics_sector],
-                    'Sector Harm Score': [sector_harm_score],
-                    'Portfolio Harm Contribution': [harm_score_contribution],  # Updated to use the new calculation
+                    'Sector Outcomes Index': [sector_harm_score],
+                    'Portfolio Outcomes Score': [harm_score_contribution],  # Updated to use the new calculation
                     'Normalized Harm Score Graph': [normalized_score_graph],
                     'IndexAlign DEI Pro %': [indexalign_data['pro'] if indexalign_data['pro'] is not None else 'N/A'],
                     'IndexAlign DEI Neutral %': [indexalign_data['neutral'] if indexalign_data['neutral'] is not None else 'N/A'],
                     'IndexAlign DEI Against %': [indexalign_data['against'] if indexalign_data['against'] is not None else 'N/A']
                 })
                 
-                # After adding the new row, recalculate harm score contributions for all stocks
+                # After adding the new row, recalculate outcomes score contributions for all stocks
                 combined_df = pd.concat([st.session_state.portfolio_df, new_row], ignore_index=True)
                 
-                # Calculate total harm units for the entire portfolio
+                # Calculate total outcomes score units for the entire portfolio
                 total_portfolio_harm_units = (
                     combined_df['Normalized Harm Score Graph'].astype(float) * 
                     combined_df['Units'].astype(float)
                 ).sum()
                 
-                # Update harm score contributions for all stocks
-                combined_df['Portfolio Harm Contribution'] = (
+                # Update outcomes score contributions for all stocks
+                combined_df['Portfolio Outcomes Score'] = (
                     combined_df['Normalized Harm Score Graph'].astype(float) * 
                     combined_df['Units'].astype(float) / 
                     total_portfolio_harm_units * 100
@@ -874,7 +874,7 @@ if not st.session_state.portfolio_df.empty:
         )
 
         max_harm_score = st.number_input( 
-            "Set Minimum Harm Score Threshold",
+            "Set Minimum Outcomes Score Threshold",
             min_value=0.0,
             max_value=100.0,
             step=1.0,
@@ -935,7 +935,7 @@ def execute_trade(selected_ticker, recommended_ticker):
             gain_loss = current_value - initial_investment
             gain_loss_percentage = (gain_loss / initial_investment) * 100 if initial_investment > 0 else 0
             
-            # Get sector and harm score data
+            # Get sector and outcomes score data
             gics_sector = get_gics_sector(new_ticker)
             sector_harm_score = get_sector_harm_score(gics_sector)
             normalized_score_graph = get_normalized_score_graph1(gics_sector) or np.random.uniform(0, 1)
@@ -955,7 +955,7 @@ def execute_trade(selected_ticker, recommended_ticker):
             updated_df.at[row_idx, 'Gain/Loss ($)'] = f"{gain_loss:.2f}"
             updated_df.at[row_idx, 'Gain/Loss %'] = gain_loss_percentage
             updated_df.at[row_idx, 'GICS Sector'] = gics_sector
-            updated_df.at[row_idx, 'Sector Harm Score'] = sector_harm_score
+            updated_df.at[row_idx, 'Sector Outcomes Index'] = sector_harm_score
             updated_df.at[row_idx, 'Normalized Harm Score Graph'] = normalized_score_graph
             updated_df.at[row_idx, 'IndexAlign DEI Pro %'] = indexalign_data['pro'] if indexalign_data['pro'] is not None else 'N/A'
             updated_df.at[row_idx, 'IndexAlign DEI Neutral %'] = indexalign_data['neutral'] if indexalign_data['neutral'] is not None else 'N/A'
@@ -964,13 +964,13 @@ def execute_trade(selected_ticker, recommended_ticker):
             # Ensure the dataframe is properly updated
             st.session_state.portfolio_df = updated_df.copy()
             
-            # Recalculate harm score contributions for all stocks
+            # Recalculate outcomes score contributions for all stocks
             total_portfolio_harm_units = (
                 st.session_state.portfolio_df['Normalized Harm Score Graph'].astype(float) * 
                 st.session_state.portfolio_df['Units'].astype(float)
             ).sum()
             
-            st.session_state.portfolio_df['Portfolio Harm Contribution'] = (
+            st.session_state.portfolio_df['Portfolio Outcomes Score'] = (
                 st.session_state.portfolio_df['Normalized Harm Score Graph'].astype(float) * 
                 st.session_state.portfolio_df['Units'].astype(float) / 
                 total_portfolio_harm_units * 100
@@ -1069,7 +1069,7 @@ if 'selected_trades' not in st.session_state:
     st.session_state.selected_trades = set()
 
 # Initialize modal
-modal = Modal(key="racial_harm_modal", title="Racial Harm Reduction Recommendations" ,  max_width=1200  )
+modal = Modal(key="racial_harm_modal", title="Inclusive Outcomes Enhancement Recommendations" ,  max_width=1200  )
 
 if "selected_trades" not in st.session_state:
     st.session_state.selected_trades = set()
@@ -1077,7 +1077,7 @@ if "selected_trades" not in st.session_state:
 # Open modal when the button is clicked
 if not st.session_state.portfolio_df.empty:
     with st.sidebar:
-        if st.button("Racial Harm Reduction Recommendations"):
+        if st.button("Inclusive Outcomes Enhancement Recommendations"):
             modal.open()
 
 # Display modal content
@@ -1274,10 +1274,10 @@ if not st.session_state.portfolio_df.empty:
         errors='coerce'
     ).fillna(0).sum()
     
-    # Calculate Weighted Average Harm Score
-    # Multiply Units × Sector Harm Score for each stock, then sum and divide by total units
+    # Calculate Weighted Average Inclusive Outcomes Index
+    # Multiply Units × Sector Outcomes Index for each stock, then sum and divide by total units
     units = st.session_state.portfolio_df['Units'].astype(float)
-    sector_harm_scores = st.session_state.portfolio_df['Sector Harm Score'].astype(float)
+    sector_harm_scores = st.session_state.portfolio_df['Sector Outcomes Index'].astype(float)
     total_units = units.sum()
     
     if total_units > 0:
@@ -1285,7 +1285,7 @@ if not st.session_state.portfolio_df.empty:
     else:
         weighted_avg_harm_score = 0
 
-    # Display total portfolio value, total gain/loss, and weighted average harm score
+    # Display total portfolio value, total gain/loss, and weighted average inclusive outcomes index
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("Total Portfolio Value", f"${portfolio_value:,.2f}")
@@ -1295,7 +1295,7 @@ if not st.session_state.portfolio_df.empty:
               f"${total_gain_loss:,.2f}")
     
     with col3:
-        st.metric("Weighted Average RFL Corporate Racial Justice Score", 
+        st.metric("Weighted Average Inclusive Outcomes Index", 
               f"{weighted_avg_harm_score:.2f}")
 
 else:
@@ -1379,7 +1379,7 @@ if not st.session_state.portfolio_df.empty:
     # Create two columns for side-by-side layout for visualizations
     col1, col2 = st.columns(2)
 
-    # Create a doughnut chart for normalized harm scores in the first column
+    # Create a doughnut chart for portfolio units distribution in the first column
     units_df = st.session_state.portfolio_df[['Stock', 'Units']]
 
     # Check if 'Units' column is not null and handle conversion
@@ -1411,25 +1411,25 @@ if not st.session_state.portfolio_df.empty:
         with col1:
             st.plotly_chart(fig1, key="original_units_chart")
 
-    # Create a doughnut chart that calculates normalized harm score * number of units
+    # Create a doughnut chart that calculates outcomes score contribution by stock
     portfolio_df = st.session_state.portfolio_df[['Stock', 'Normalized Harm Score Graph', 'Units']].copy()
 
     # Convert columns to numeric and fill NaNs with 0
     portfolio_df['Normalized Harm Score Graph'] = pd.to_numeric(portfolio_df['Normalized Harm Score Graph'], errors='coerce').fillna(0)
     portfolio_df['Units'] = pd.to_numeric(portfolio_df['Units'], errors='coerce').fillna(0)
 
-    # Calculate total harm score units
+    # Calculate total outcomes score units
     total_harm_score_units = (portfolio_df['Normalized Harm Score Graph'] * portfolio_df['Units']).sum()
 
-    # Create a new column for harm score contribution percentage
+    # Create a new column for outcomes score contribution percentage
     portfolio_df['Harm Score Contribution (%)'] = (
         (portfolio_df['Normalized Harm Score Graph'] * portfolio_df['Units']) / total_harm_score_units * 100
     ).fillna(0)
 
-    # Prepare data for harm score contribution chart
+    # Prepare data for outcomes score contribution chart
     contribution_data = portfolio_df[['Stock', 'Harm Score Contribution (%)']]
 
-    # Create doughnut chart for harm score contribution
+    # Create doughnut chart for outcomes score contribution
     if not contribution_data['Harm Score Contribution (%)'].isnull().all():
         contribution_data['Harm Score Contribution (%)'] = contribution_data['Harm Score Contribution (%)'].astype(float)
 
@@ -1437,7 +1437,7 @@ if not st.session_state.portfolio_df.empty:
             contribution_data,
             names='Stock',
             values='Harm Score Contribution (%)',
-            title="Portfolio Harm Contribution by Stock",
+            title="Portfolio Outcomes Score by Stock",
             labels={'Harm Score Contribution (%)': 'Contribution (%)'},
             hole=0.4,
             color='Stock',  # Assign colors based on stocks
@@ -1561,18 +1561,18 @@ if not st.session_state.portfolio_df.empty:
 
 # Display optimized portfolio
 if st.session_state.optimized_portfolio_df is not None:
-    st.subheader("Harm Reduction Optimized Portfolio")
+    st.subheader("Outcomes-Optimized Portfolio")
     if hasattr(st.session_state, 'optimization_success') and st.session_state.optimization_success:
         st.success(
         "**Portfolio Optimization Insight:**\n"
         "This rebalanced portfolio allocation maximizes total financial return while "
-        "ensuring the harm profile, or average weighted harm score, of the holdings "
-        "in your portfolio meets or exceeds the user-selected minimum harm threshold and required holding per stock. "
-        "The harm profile score generation is powered by the RFL Racial Harm Score. "
-        "The Score is generated at the GICS sector level. Racial harm, or disparate "
-        "impact, is measured across a proprietary harm typology mapped to the "
-        "lifecycle activities of typical sector enterprises. Evidence of these disparate "
-        "impacts are backed by deep learning methodologies and validated by expert "
+        "ensuring the outcome profile, or average weighted inclusive outcomes index, of the holdings "
+        "in your portfolio meets or exceeds the user-selected minimum outcomes score threshold and required holding per stock. "
+        "The inclusive outcomes score generation is powered by the Inclusive Outcomes Index. "
+        "The Index is generated at the GICS sector level. Inclusive outcomes, or different "
+        "impact, are measured across a proprietary outcomes framework mapped to the "
+        "lifecycle activities of typical sector enterprises. Evidence of these outcomes "
+        "are backed by deep learning methodologies and validated by expert "
         "human research resources. "
         )
     df_display1 = st.session_state.optimized_portfolio_df.drop(columns=['Normalized Harm Score Graph']).reset_index(drop=True)
@@ -1667,16 +1667,16 @@ if st.session_state.optimized_portfolio_df is not None:
                   names='Stock', 
                   values='Percentage', 
                   hole=0.4, 
-                  title="Optimized Portfolio Harm Contribution",
+                  title="Optimized Portfolio Outcomes Score",
                   color='Stock',  # Assign colors based on stocks
             color_discrete_map=stock_color_map )
     with col4:
         st.plotly_chart(fig4, key="optimized_harm_chart")
 
-    # Create a new row for the two new doughnut charts (optimized portfolio)
+    # Create a new row for the two new doughnut charts (outcomes-optimized portfolio)
     col7, col8 = st.columns(2)
     
-    # Chart 1: Portfolio Value Contribution by Stock (Optimized)
+    # Chart 1: Portfolio Value Contribution by Stock (Outcomes-Optimized)
     optimized_value_contribution_df = st.session_state.optimized_portfolio_df[['Stock', 'Current Value ($)']].copy()
     optimized_value_contribution_df['Current Value ($)'] = pd.to_numeric(
         optimized_value_contribution_df['Current Value ($)'].astype(str).str.replace('$', '').str.replace(',', ''), 
@@ -1701,7 +1701,7 @@ if st.session_state.optimized_portfolio_df is not None:
         with col7:
             st.plotly_chart(fig5, key="optimized_value_contribution_chart")
     
-    # Chart 2: IndexAlign Political Giving DEI Voting Record (Optimized)
+    # Chart 2: IndexAlign Political Giving DEI Voting Record (Outcomes-Optimized)
     optimized_indexalign_df = st.session_state.optimized_portfolio_df[['Stock', 'IndexAlign DEI Pro %', 'IndexAlign DEI Neutral %', 'IndexAlign DEI Against %', 'Current Value ($)']].copy()
     
     # Convert Current Value to numeric for weighting
@@ -1785,8 +1785,8 @@ if st.session_state.optimized_portfolio_df is not None:
         with col8:
             st.plotly_chart(fig6, key="optimized_indexalign_chart")
 
-    # Optimized Portfolio Summary
-    # Calculate optimized portfolio value directly from the optimized portfolio dataframe
+    # Outcomes-Optimized Portfolio Summary
+    # Calculate outcomes-optimized portfolio value directly from the optimized portfolio dataframe
     # Handle both numeric and string formats to ensure we get the exact values from the table
     try:
         # Try direct numeric conversion first (optimization function sets these as numeric)
@@ -1814,7 +1814,7 @@ if st.session_state.optimized_portfolio_df is not None:
         errors='coerce'
     ).fillna(0).sum()
     
-    st.subheader("Portfolio Summary (Harm Reduction Optimized)")
+    st.subheader("Portfolio Summary (Inclusive Outcomes Optimized)")
     
     # Add CSS to reduce vertical margins and set consistent font size for delta and percentage
     st.markdown("""
@@ -1846,9 +1846,9 @@ if st.session_state.optimized_portfolio_df is not None:
         </style>
     """, unsafe_allow_html=True)
     
-    # Calculate Weighted Average Harm Score for optimized portfolio
+    # Calculate Weighted Average Inclusive Outcomes Index for optimized portfolio
     optimized_units = st.session_state.optimized_portfolio_df['Units'].astype(float)
-    optimized_sector_harm_scores = st.session_state.optimized_portfolio_df['Sector Harm Score'].astype(float)
+    optimized_sector_harm_scores = st.session_state.optimized_portfolio_df['Sector Outcomes Index'].astype(float)
     optimized_total_units = optimized_units.sum()
     
     if optimized_total_units > 0:
@@ -1856,9 +1856,9 @@ if st.session_state.optimized_portfolio_df is not None:
     else:
         optimized_weighted_avg_harm_score = 0
     
-    # Calculate Weighted Average Harm Score for original portfolio (for comparison)
+    # Calculate Weighted Average Inclusive Outcomes Index for original portfolio (for comparison)
     original_units = st.session_state.portfolio_df['Units'].astype(float)
-    original_sector_harm_scores = st.session_state.portfolio_df['Sector Harm Score'].astype(float)
+    original_sector_harm_scores = st.session_state.portfolio_df['Sector Outcomes Index'].astype(float)
     original_total_units = original_units.sum()
     
     if original_total_units > 0:
@@ -1866,7 +1866,7 @@ if st.session_state.optimized_portfolio_df is not None:
     else:
         original_weighted_avg_harm_score = 0
     
-    # Calculate harm score change
+    # Calculate outcomes score change
     harm_score_change = optimized_weighted_avg_harm_score - original_weighted_avg_harm_score
     harm_score_pct_change = ((optimized_weighted_avg_harm_score - original_weighted_avg_harm_score) / original_weighted_avg_harm_score * 100) if original_weighted_avg_harm_score > 0 else 0
     
@@ -1911,7 +1911,7 @@ if st.session_state.optimized_portfolio_df is not None:
     
     with col3:
         st.markdown('<div class="portfolio-metric-container">', unsafe_allow_html=True)
-        st.metric("Weighted Average RFL Corporate Racial Justice Score", 
+        st.metric("Weighted Average Inclusive Outcomes Index", 
               f"{optimized_weighted_avg_harm_score:.2f}", 
               delta=f"{harm_score_change:.2f}", 
               delta_color="normal")
@@ -1925,21 +1925,21 @@ if st.session_state.optimized_portfolio_df is not None:
         st.markdown('</div>', unsafe_allow_html=True)
 
     
-    portfolio_df = st.session_state.portfolio_df[['Stock', 'Portfolio Harm Contribution', 'Units']].copy()
+    portfolio_df = st.session_state.portfolio_df[['Stock', 'Portfolio Outcomes Score', 'Units']].copy()
 
     # Convert columns to numeric and fill NaNs with 0
-    portfolio_df['Portfolio Harm Contribution'] = pd.to_numeric(portfolio_df['Portfolio Harm Contribution'], errors='coerce').fillna(0)
+    portfolio_df['Portfolio Outcomes Score'] = pd.to_numeric(portfolio_df['Portfolio Outcomes Score'], errors='coerce').fillna(0)
     portfolio_df['Units'] = pd.to_numeric(portfolio_df['Units'], errors='coerce').fillna(0)
 
-    # Calculate total harm score units
-    total_harm_score_units = (portfolio_df['Portfolio Harm Contribution'] * portfolio_df['Units']).sum()
+    # Calculate total outcomes score units
+    total_harm_score_units = (portfolio_df['Portfolio Outcomes Score'] * portfolio_df['Units']).sum()
 
-    # Create a new column for harm score contribution percentage
+    # Create a new column for outcomes score contribution percentage
     portfolio_df['Harm Score Contribution (%)'] = (
-        (portfolio_df['Portfolio Harm Contribution'] * portfolio_df['Units']) / total_harm_score_units * 100
+        (portfolio_df['Portfolio Outcomes Score'] * portfolio_df['Units']) / total_harm_score_units * 100
     ).fillna(0)
 
-    # Prepare data for harm score contribution chart
+    # Prepare data for outcomes score contribution chart
     contribution_data = portfolio_df[['Stock', 'Harm Score Contribution (%)']]
 
 
@@ -2054,7 +2054,7 @@ def render_pdf_pages(file_path):
 st.subheader(f"Legal Disclamer and Score Methodology", divider="blue")
 st.markdown(" ")
 with st.expander("Legal Disclaimer", expanded=False):
-    disclaimer_content = read_disclaimer_file("Kataly-Disclaimer.docx")
+    disclaimer_content = read_disclaimer_file("RFL-Disclaimer.docx")
     st.markdown(disclaimer_content, unsafe_allow_html=True)
   
 with st.expander("Score Methodology", expanded=False):
