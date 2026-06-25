@@ -1353,29 +1353,26 @@ if not st.session_state.portfolio_df.empty:
 
     st.subheader("Portfolio Performance Analysis")
     stats_df = calculate_portfolio_stats(st.session_state.portfolio_df)
+
     if stats_df is not None:
-        # Format the statistics table
         formatted_stats = stats_df.copy()
         formatted_stats.columns = ['Value']
-        
-        # Format monetary values
+
+        display_stats = formatted_stats.copy()
+        display_stats['Value'] = display_stats['Value'].astype(object)
+
         monetary_metrics = ['Start Value', 'End Value']
         for metric in monetary_metrics:
-            if metric in formatted_stats.index:
-                formatted_stats.loc[metric, 'Value'] = f"${formatted_stats.loc[metric, 'Value']:,.2f}"
-        
-        # Format percentage values
-        percentage_metrics = [
-            'Total Return [%]', 'Max Drawdown [%]', 'Best Trade [%]', 
-            'Worst Trade [%]', 'Avg Winning Trade [%]', 'Avg Losing Trade [%]',
-            'Win Rate [%]'
-        ]
+            if metric in display_stats.index:
+                display_stats.loc[metric, 'Value'] = f"${formatted_stats.loc[metric, 'Value']:,.2f}"
+
+        percentage_metrics = ['Total Return [%]', 'Max Drawdown [%]', 'Best Trade [%]', 'Worst Trade [%]',
+                             'Avg Winning Trade [%]', 'Avg Losing Trade [%]', 'Win Rate [%]']
         for metric in percentage_metrics:
-            if metric in formatted_stats.index:
-                formatted_stats.loc[metric, 'Value'] = f"{formatted_stats.loc[metric, 'Value']}%"
-        
-        # Display the formatted table
-        st.dataframe(formatted_stats, use_container_width=True)
+            if metric in display_stats.index:
+                display_stats.loc[metric, 'Value'] = f"{formatted_stats.loc[metric, 'Value']:.2f}%"
+
+        st.dataframe(display_stats, use_container_width=True)
     # Create two columns for side-by-side layout for visualizations
     col1, col2 = st.columns(2)
 
